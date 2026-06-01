@@ -1,0 +1,45 @@
+version: '3'
+services:
+  project:
+    build: ./php
+    image: php:latest
+    container_name: project
+    hostname: "project"
+    volumes:
+      - ./tugas_akhir:/var/www/html
+      - ./php/www.conf:/usr/local/etc/php-fpm.d/www.conf
+    working_dir: /var/www/html
+    depends_on: 
+      - db_project
+
+  db_project:
+    image: mariadb:10.2
+    container_name: db_project
+    restart: unless-stopped
+    tty: true
+    ports:
+      - "13306:3306"
+    volumes:
+      - ./db/data:/var/lib/mysql
+      - ./db/conf.d:/etc/mysql/conf.d:ro
+    environment:
+      MYSQL_USER: root
+      MYSQL_PASSWORD: p455w0rd
+      MYSQL_ROOT_PASSWORD: p455w0rd
+      TZ: Asia/Jakarta
+      SERVICE_TAGS: dev
+      SERVICE_NAME: mysql  
+    read_only: false
+
+  nginx_project:
+    build: ./nginx
+    image: nginx:latest
+    container_name: nginx_project
+    hostname: "nginx_project"
+    ports:
+      - "80:80"
+    volumes:
+      - ./tugas_akhir:/var/www/html
+      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf
+    depends_on:
+      - project
