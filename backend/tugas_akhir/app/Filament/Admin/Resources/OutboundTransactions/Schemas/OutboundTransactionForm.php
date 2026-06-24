@@ -120,8 +120,12 @@ class OutboundTransactionForm
                                     ]),
 
                                 TextInput::make('reference_number')
-                                    ->label('No. Invoice / No. Keluar')
-                                    ->placeholder('Contoh: INV-K/0525/001')
+                                    ->label('No. Invoice')
+                                    ->default(fn (): string => self::generateReferenceNumber())
+                                    ->readOnly()
+                                    ->required()
+                                    ->dehydrated(true)
+                                    ->helperText('Nomor invoice barang keluar dibuat otomatis oleh sistem.')
                                     ->maxLength(255)
                                     ->columnSpan([
                                         'default' => 12,
@@ -600,5 +604,25 @@ class OutboundTransactionForm
                     ])
                     ->columnSpanFull(),
             ]);
+    }
+
+    private static function generateReferenceNumber(): string
+    {
+        $prefix = 'INV-NAURA';
+        $date = now()->format('ymd');
+
+        $lastReferenceNumber = \App\Models\OutboundTransaction::query()
+            ->where('reference_number', 'like', "{$prefix}{$date}%")
+            ->orderByDesc('reference_number')
+            ->value('reference_number');
+
+        $nextSequence = 1;
+
+        if ($lastReferenceNumber) {
+            $lastSequence = (int) substr($lastReferenceNumber, -5);
+            $nextSequence = $lastSequence + 1;
+        }
+
+        return $prefix . $date . str_pad((string) $nextSequence, 5, '0', STR_PAD_LEFT);
     }
 }

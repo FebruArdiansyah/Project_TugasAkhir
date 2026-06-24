@@ -4,6 +4,7 @@ namespace App\Console\Commands;
 
 use App\Models\Asset;
 use App\Models\AssetCategory;
+use App\Models\AssetImportLog;
 use App\Models\AssetLocation;
 use App\Services\AssetCodeService;
 use Illuminate\Console\Command;
@@ -20,6 +21,10 @@ class ImportAssetExcelCommand extends Command
 
     protected $description = 'Import data aktiva tetap dari Excel ke modul manajemen aset.';
 
+    private int $importedRows = 0;
+
+    private int $skippedRows = 0;
+
     public function handle(): int
     {
         $file = base_path($this->argument('file'));
@@ -27,10 +32,36 @@ class ImportAssetExcelCommand extends Command
         if (! file_exists($file)) {
             $this->error("File tidak ditemukan: {$file}");
 
+            AssetImportLog::create([
+                'file_name' => basename((string) $this->argument('file')),
+                'total_rows' => 0,
+                'imported_rows' => 0,
+                'skipped_rows' => 0,
+                'status' => 'failed',
+                'message' => 'File tidak ditemukan.',
+                'error_message' => "File tidak ditemukan: {$file}",
+                'imported_by' => 1,
+                'started_at' => now(),
+                'finished_at' => now(),
+            ]);
+
             return self::FAILURE;
         }
 
         $this->info("Membaca file: {$file}");
+
+        $log = AssetImportLog::create([
+            'file_name' => basename($file),
+            'total_rows' => 0,
+            'imported_rows' => 0,
+            'skipped_rows' => 0,
+            'status' => 'processing',
+            'message' => 'Proses import asset sedang berjalan.',
+            'error_message' => null,
+            'imported_by' => 1,
+            'started_at' => now(),
+            'finished_at' => null,
+        ]);
 
         try {
             $sheets = Excel::toCollection(null, $file);
@@ -38,12 +69,32 @@ class ImportAssetExcelCommand extends Command
             if ($sheets->isEmpty()) {
                 $this->error('File Excel kosong.');
 
+                $log->update([
+                    'status' => 'failed',
+                    'message' => 'File Excel kosong.',
+                    'error_message' => 'Tidak ada sheet yang bisa dibaca dari file Excel.',
+                    'finished_at' => now(),
+                ]);
+
                 return self::FAILURE;
             }
 
             $rows = $sheets->first();
 
-            DB::transaction(function () use ($rows): void {
+            if (! $rows instanceof Collection || $rows->isEmpty()) {
+                $this->error('Sheet pertama kosong.');
+
+                $log->update([
+                    'status' => 'failed',
+                    'message' => 'Sheet pertama kosong.',
+                    'error_message' => 'Sheet pertama tidak memiliki data yang bisa diproses.',
+                    'finished_at' => now(),
+                ]);
+
+                return self::FAILURE;
+            }
+
+            $result = DB::transaction(function () use ($rows): array {
                 if ($this->option('fresh')) {
                     Asset::query()
                         ->where('description', 'like', 'Import dari Excel Aktiva Tetap%')
@@ -52,14 +103,44 @@ class ImportAssetExcelCommand extends Command
                     $this->warn('Asset hasil import Excel sebelumnya sudah dihapus.');
                 }
 
-                $this->importRows($rows);
+                return $this->importRows($rows);
             });
 
+            $status = $result['skipped_rows'] > 0
+                ? 'success_with_warning'
+                : 'success';
+
+            $message = $result['skipped_rows'] > 0
+                ? 'Import berhasil, tetapi ada beberapa baris yang dilewati.'
+                : 'Import asset berhasil.';
+
+            $log->update([
+                'total_rows' => $result['total_rows'],
+                'imported_rows' => $result['imported_rows'],
+                'skipped_rows' => $result['skipped_rows'],
+                'status' => $status,
+                'message' => $message,
+                'error_message' => null,
+                'finished_at' => now(),
+            ]);
+
             $this->info('Import asset selesai.');
+            $this->info("Total baris dibaca: {$result['total_rows']}");
+            $this->info("Total asset berhasil diproses: {$result['imported_rows']}");
+            $this->warn("Total baris dilewati: {$result['skipped_rows']}");
 
             return self::SUCCESS;
         } catch (Throwable $e) {
             $this->error('Import gagal: ' . $e->getMessage());
+
+            $log->update([
+                'status' => 'failed',
+                'message' => 'Import gagal.',
+                'error_message' => $e->getMessage(),
+                'imported_rows' => $this->importedRows,
+                'skipped_rows' => $this->skippedRows,
+                'finished_at' => now(),
+            ]);
 
             report($e);
 
@@ -67,12 +148,12 @@ class ImportAssetExcelCommand extends Command
         }
     }
 
-    private function importRows(Collection $rows): void
+    private function importRows(Collection $rows): array
     {
         $currentCategory = null;
 
-        $imported = 0;
-        $skipped = 0;
+        $this->importedRows = 0;
+        $this->skippedRows = 0;
 
         foreach ($rows as $index => $row) {
             $rowNumber = $index + 1;
@@ -111,20 +192,23 @@ class ImportAssetExcelCommand extends Command
             }
 
             if (! $currentCategory) {
-                $skipped++;
+                $this->skippedRows++;
+                $this->warn("Baris {$rowNumber} dilewati: kategori belum ditemukan.");
                 continue;
             }
 
             $assetName = $columnC;
 
             if (! $assetName || strlen($assetName) < 2) {
-                $skipped++;
+                $this->skippedRows++;
+                $this->warn("Baris {$rowNumber} dilewati: nama asset kosong/tidak valid.");
                 continue;
             }
 
             $locationName = $this->cell($values, 6);
             $year = $this->toYear($values->get(7));
             $price = $this->toNumber($values->get(8));
+
             $licensePlate = $this->makeLicensePlate(
                 $values->get(3),
                 $values->get(4),
@@ -132,7 +216,8 @@ class ImportAssetExcelCommand extends Command
             );
 
             if ($price <= 0) {
-                $skipped++;
+                $this->skippedRows++;
+                $this->warn("Baris {$rowNumber} dilewati: harga perolehan kosong/tidak valid.");
                 continue;
             }
 
@@ -166,14 +251,17 @@ class ImportAssetExcelCommand extends Command
                 'condition' => 'baik',
                 'status' => 'aktif',
                 'description' => 'Import dari Excel Aktiva Tetap baris ' . $rowNumber,
-                'created_by' => auth()->id() ?: 1,
+                'created_by' => 1,
             ]);
 
-            $imported++;
+            $this->importedRows++;
         }
 
-        $this->info("Total asset berhasil diproses: {$imported}");
-        $this->warn("Total baris dilewati: {$skipped}");
+        return [
+            'total_rows' => $rows->count(),
+            'imported_rows' => $this->importedRows,
+            'skipped_rows' => $this->skippedRows,
+        ];
     }
 
     private function cell(Collection $values, int $index): ?string

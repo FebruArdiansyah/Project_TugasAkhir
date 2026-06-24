@@ -3,7 +3,6 @@
 namespace Database\Seeders;
 
 use App\Models\Customer;
-use App\Models\Product;
 use App\Models\ProductCategory;
 use App\Models\ProductDensity;
 use App\Models\ProductType;
@@ -16,22 +15,38 @@ class InventoryMasterSeeder extends Seeder
 {
     public function run(): void
     {
-        $pcs = Unit::updateOrCreate(
+        /*
+        |--------------------------------------------------------------------------
+        | Unit / Satuan
+        |--------------------------------------------------------------------------
+        */
+        Unit::updateOrCreate(
             ['code' => 'PCS'],
-            ['name' => 'Pieces']
+            [
+                'name' => 'Pieces',
+            ]
         );
 
         Unit::updateOrCreate(
             ['code' => 'ROLL'],
-            ['name' => 'Roll']
+            [
+                'name' => 'Roll',
+            ]
         );
 
         Unit::updateOrCreate(
             ['code' => 'PACK'],
-            ['name' => 'Pack']
+            [
+                'name' => 'Pack',
+            ]
         );
 
-        $gudangUtama = Warehouse::updateOrCreate(
+        /*
+        |--------------------------------------------------------------------------
+        | Gudang
+        |--------------------------------------------------------------------------
+        */
+        Warehouse::updateOrCreate(
             ['code' => 'GDG-001'],
             [
                 'name' => 'Gudang Utama',
@@ -61,51 +76,97 @@ class InventoryMasterSeeder extends Seeder
             ]
         );
 
-        $eon = ProductType::updateOrCreate(
-            ['name' => 'EON'],
-            ['is_active' => true]
-        );
+        /*
+        |--------------------------------------------------------------------------
+        | Jenis Produk
+        |--------------------------------------------------------------------------
+        */
+        $productTypes = [
+            'EON',
+            'ROYAL',
+            'SUPREME',
+            'INOAC',
+            'QUANTUM',
+            'YELLOW',
+            'BIGLAND',
+            'BLP4',
+            'COVER',
+            'BANTAL',
+            'AKSESORIS',
+            'UMUM',
+        ];
 
-        $royal = ProductType::updateOrCreate(
-            ['name' => 'ROYAL'],
-            ['is_active' => true]
-        );
+        foreach ($productTypes as $type) {
+            ProductType::updateOrCreate(
+                ['name' => $type],
+                [
+                    'is_active' => true,
+                ]
+            );
+        }
 
-        $supreme = ProductType::updateOrCreate(
-            ['name' => 'SUPREME'],
-            ['is_active' => true]
-        );
+        /*
+        |--------------------------------------------------------------------------
+        | Density Produk
+        |--------------------------------------------------------------------------
+        */
+        $densities = [
+            'D-16',
+            'D-16H',
+            'D-18',
+            'D-20',
+            'D-22',
+            'D-23',
+            'D-24',
+            'D-26',
+            'D-28',
+            'D-30',
+            'UMUM',
+        ];
 
-        $d22 = ProductDensity::updateOrCreate(
-            ['name' => 'D-22'],
-            ['is_active' => true]
-        );
+        foreach ($densities as $density) {
+            ProductDensity::updateOrCreate(
+                ['name' => $density],
+                [
+                    'is_active' => true,
+                ]
+            );
+        }
 
-        $d23 = ProductDensity::updateOrCreate(
-            ['name' => 'D-23'],
-            ['is_active' => true]
-        );
+        /*
+        |--------------------------------------------------------------------------
+        | Kategori Produk
+        |--------------------------------------------------------------------------
+        */
+        $categories = [
+            'LG++',
+            'KASUR STANDAR',
+            'KASUR LIPAT',
+            'KASUR LIPAT 4',
+            'SOFA BED',
+            'COVER KASUR',
+            'BANTAL',
+            'ALAS GOSOK',
+            'VACUM',
+            'KARUNG',
+            'AKSESORIS',
+            'UMUM',
+        ];
 
-        $d24 = ProductDensity::updateOrCreate(
-            ['name' => 'D-24'],
-            ['is_active' => true]
-        );
+        foreach ($categories as $category) {
+            ProductCategory::updateOrCreate(
+                ['name' => $category],
+                [
+                    'is_active' => true,
+                ]
+            );
+        }
 
-        $lgPlus = ProductCategory::updateOrCreate(
-            ['name' => 'LG++'],
-            ['is_active' => true]
-        );
-
-        $vacumCategory = ProductCategory::updateOrCreate(
-            ['name' => 'VACUM'],
-            ['is_active' => true]
-        );
-
-        $karungCategory = ProductCategory::updateOrCreate(
-            ['name' => 'KARUNG'],
-            ['is_active' => true]
-        );
-
+        /*
+        |--------------------------------------------------------------------------
+        | Supplier
+        |--------------------------------------------------------------------------
+        */
         Supplier::updateOrCreate(
             ['code' => 'SUP-001'],
             [
@@ -126,6 +187,31 @@ class InventoryMasterSeeder extends Seeder
             ]
         );
 
+        Supplier::updateOrCreate(
+            ['code' => 'SUP-003'],
+            [
+                'name' => 'PT Naura Sukses Abadi',
+                'phone' => null,
+                'address' => 'Tangerang',
+                'is_active' => true,
+            ]
+        );
+
+        Supplier::updateOrCreate(
+            ['code' => 'SUP-004'],
+            [
+                'name' => 'Supplier Umum',
+                'phone' => null,
+                'address' => null,
+                'is_active' => true,
+            ]
+        );
+
+        /*
+        |--------------------------------------------------------------------------
+        | Customer
+        |--------------------------------------------------------------------------
+        */
         Customer::updateOrCreate(
             ['code' => 'CUS-001'],
             [
@@ -148,114 +234,47 @@ class InventoryMasterSeeder extends Seeder
             ]
         );
 
-        Product::updateOrCreate(
-            ['code' => 'BRG-001'],
+        Customer::updateOrCreate(
+            ['code' => 'CUS-003'],
             [
-                'name' => 'EON 200x145x30',
-                'product_type_id' => $eon->id,
-                'product_density_id' => $d22->id,
-                'product_category_id' => $lgPlus->id,
-                'unit_id' => $pcs->id,
-                'length' => 200,
-                'width' => 145,
-                'thickness' => 30,
-                'size_text' => '200 x 145 x 30 CM',
-                'full_name' => 'EON D-22 LG++ 200 x 145 x 30 CM',
-                'default_purchase_price' => 500000,
-                'default_selling_price' => 650000,
-                'last_purchase_price' => 0,
-                'last_selling_price' => 0,
-                'description' => null,
+                'name' => 'CENTRAL FOAM',
+                'phone' => null,
+                'address' => null,
+                'customer_type' => 'customer',
                 'is_active' => true,
             ]
         );
 
-        Product::updateOrCreate(
-            ['code' => 'BRG-002'],
+        Customer::updateOrCreate(
+            ['code' => 'CUS-004'],
             [
-                'name' => 'ROYAL 180x200x20',
-                'product_type_id' => $royal->id,
-                'product_density_id' => $d23->id,
-                'product_category_id' => $lgPlus->id,
-                'unit_id' => $pcs->id,
-                'length' => 180,
-                'width' => 200,
-                'thickness' => 20,
-                'size_text' => '180 x 200 x 20 CM',
-                'full_name' => 'ROYAL D-23 LG++ 180 x 200 x 20 CM',
-                'default_purchase_price' => 600000,
-                'default_selling_price' => 800000,
-                'last_purchase_price' => 0,
-                'last_selling_price' => 0,
-                'description' => null,
+                'name' => 'AHM / YELI',
+                'phone' => null,
+                'address' => null,
+                'customer_type' => 'customer',
                 'is_active' => true,
             ]
         );
 
-        Product::updateOrCreate(
-            ['code' => 'BRG-003'],
+        Customer::updateOrCreate(
+            ['code' => 'CUS-005'],
             [
-                'name' => 'SUPREME 160x200x25',
-                'product_type_id' => $supreme->id,
-                'product_density_id' => $d24->id,
-                'product_category_id' => $lgPlus->id,
-                'unit_id' => $pcs->id,
-                'length' => 160,
-                'width' => 200,
-                'thickness' => 25,
-                'size_text' => '160 x 200 x 25 CM',
-                'full_name' => 'SUPREME D-24 LG++ 160 x 200 x 25 CM',
-                'default_purchase_price' => 700000,
-                'default_selling_price' => 950000,
-                'last_purchase_price' => 0,
-                'last_selling_price' => 0,
-                'description' => null,
+                'name' => 'Customer Umum',
+                'phone' => null,
+                'address' => null,
+                'customer_type' => 'customer',
                 'is_active' => true,
             ]
         );
 
-        Product::updateOrCreate(
-            ['code' => 'BRG-005'],
-            [
-                'name' => 'VACUM',
-                'product_type_id' => null,
-                'product_density_id' => null,
-                'product_category_id' => $vacumCategory->id,
-                'unit_id' => $pcs->id,
-                'length' => null,
-                'width' => null,
-                'thickness' => null,
-                'size_text' => null,
-                'full_name' => 'VACUM',
-                'default_purchase_price' => 0,
-                'default_selling_price' => 0,
-                'last_purchase_price' => 0,
-                'last_selling_price' => 0,
-                'description' => 'Tambahan cepat untuk barang keluar',
-                'is_active' => true,
-            ]
-        );
-
-        Product::updateOrCreate(
-            ['code' => 'BRG-006'],
-            [
-                'name' => 'KARUNG',
-                'product_type_id' => null,
-                'product_density_id' => null,
-                'product_category_id' => $karungCategory->id,
-                'unit_id' => $pcs->id,
-                'length' => null,
-                'width' => null,
-                'thickness' => null,
-                'size_text' => null,
-                'full_name' => 'KARUNG',
-                'default_purchase_price' => 0,
-                'default_selling_price' => 0,
-                'last_purchase_price' => 0,
-                'last_selling_price' => 0,
-                'description' => 'Tambahan cepat untuk barang keluar',
-                'is_active' => true,
-            ]
-        );
+        /*
+        |--------------------------------------------------------------------------
+        | Master Produk Naura
+        |--------------------------------------------------------------------------
+        | Produk banyak diisi dari ProductNauraSeeder.
+        | Pastikan file ProductNauraSeeder.php sudah ada di database/seeders.
+        |--------------------------------------------------------------------------
+        */
+        $this->call(ProductNauraSeeder::class);
     }
 }

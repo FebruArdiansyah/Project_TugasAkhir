@@ -9,11 +9,14 @@ use Filament\Actions\BulkActionGroup;
 use Filament\Actions\DeleteBulkAction;
 use Filament\Actions\EditAction;
 use Filament\Actions\ViewAction;
+use Filament\Forms\Components\DatePicker;
 use Filament\Forms\Components\Textarea;
 use Filament\Notifications\Notification;
 use Filament\Tables\Columns\TextColumn;
+use Filament\Tables\Filters\Filter;
 use Filament\Tables\Filters\SelectFilter;
 use Filament\Tables\Table;
+use Illuminate\Database\Eloquent\Builder;
 use Throwable;
 
 class OutboundTransactionsTable
@@ -119,6 +122,31 @@ class OutboundTransactionsTable
                     ->toggleable(isToggledHiddenByDefault: true),
             ])
             ->filters([
+                Filter::make('transaction_date')
+                    ->label('Periode Transaksi')
+                    ->form([
+                        DatePicker::make('date_from')
+                            ->label('Dari Tanggal')
+                            ->native(false)
+                            ->displayFormat('d M Y'),
+
+                        DatePicker::make('date_until')
+                            ->label('Sampai Tanggal')
+                            ->native(false)
+                            ->displayFormat('d M Y'),
+                    ])
+                    ->query(function (Builder $query, array $data): Builder {
+                        return $query
+                            ->when(
+                                $data['date_from'] ?? null,
+                                fn (Builder $query, $date): Builder => $query->whereDate('transaction_date', '>=', $date),
+                            )
+                            ->when(
+                                $data['date_until'] ?? null,
+                                fn (Builder $query, $date): Builder => $query->whereDate('transaction_date', '<=', $date),
+                            );
+                    }),
+
                 SelectFilter::make('status')
                     ->label('Status')
                     ->options([

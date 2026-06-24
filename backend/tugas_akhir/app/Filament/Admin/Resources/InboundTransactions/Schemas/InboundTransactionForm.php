@@ -77,7 +77,11 @@ class InboundTransactionForm
 
                                 TextInput::make('invoice_number')
                                     ->label('No. Invoice')
-                                    ->placeholder('Contoh: INV/0525/032')
+                                    ->default(fn (): string => self::generateInvoiceNumber())
+                                    ->readOnly()
+                                    ->required()
+                                    ->dehydrated(true)
+                                    ->helperText('Nomor invoice dibuat otomatis oleh sistem.')
                                     ->maxLength(255)
                                     ->columnSpan([
                                         'default' => 12,
@@ -430,4 +434,23 @@ class InboundTransactionForm
                     ->columnSpanFull(),
             ]);
     }
+
+    private static function generateInvoiceNumber(): string
+{
+    $date = now()->format('Ymd');
+
+    $lastInvoiceNumber = \App\Models\InboundTransaction::query()
+        ->where('invoice_number', 'like', "INV-IN-{$date}-%")
+        ->orderByDesc('invoice_number')
+        ->value('invoice_number');
+
+    $nextSequence = 1;
+
+    if ($lastInvoiceNumber) {
+        $lastSequence = (int) substr($lastInvoiceNumber, -4);
+        $nextSequence = $lastSequence + 1;
+    }
+
+    return 'INV-IN-' . $date . '-' . str_pad((string) $nextSequence, 4, '0', STR_PAD_LEFT);
+}
 }

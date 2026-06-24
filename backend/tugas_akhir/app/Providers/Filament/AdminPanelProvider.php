@@ -14,7 +14,7 @@ use Awcodes\Overlook\Widgets\OverlookWidget;
 use BezhanSalleh\FilamentShield\FilamentShieldPlugin;
 use Boquizo\FilamentLogViewer\FilamentLogViewerPlugin;
 use DiogoGPinto\AuthUIEnhancer\AuthUIEnhancerPlugin;
-use DutchCodingCompany\FilamentDeveloperLogins\FilamentDeveloperLoginsPlugin;
+//use DutchCodingCompany\FilamentDeveloperLogins\FilamentDeveloperLoginsPlugin;
 use Filafly\Icons\Phosphor\Enums\Phosphor;
 use Filafly\Icons\Phosphor\PhosphorIcons;
 use Filafly\Themes\Brisk\BriskTheme;
@@ -45,9 +45,12 @@ final class AdminPanelProvider extends PanelProvider
             ->path('admin')
             ->authGuard('web')
             ->login()
+            ->brandName('PT. Naura Sukses Abadi')
+        
+            ->favicon(asset('images/logo.png'))
             ->defaultThemeMode(ThemeMode::Light)
             ->colors([
-                'primary' => Color::Blue,
+                'primary' => Color::Emerald,
             ])
             ->maxContentWidth('7xl')
             ->sidebarCollapsibleOnDesktop()
@@ -64,10 +67,10 @@ final class AdminPanelProvider extends PanelProvider
             ->navigationGroups([
                 NavigationGroup::make()
                     ->collapsed(true)
-                    ->label('General'),
+                    ->label('Umum'),
                 NavigationGroup::make()
                     ->collapsed(true)
-                    ->label('Administration'),
+                    ->label('Administrasi Sistem'),
             ])
             ->plugins([
                 BriskTheme::make(),
@@ -80,14 +83,14 @@ final class AdminPanelProvider extends PanelProvider
                 AuthUIEnhancerPlugin::make()
                     ->showEmptyPanelOnMobile(false)
                     ->formPanelPosition('right')
-                    ->formPanelWidth('40%')
+                    ->formPanelWidth('39%')
                     ->emptyPanelBackgroundImageOpacity('70%')
-                    ->emptyPanelBackgroundImageUrl('https://images.pexels.com/photos/466685/pexels-photo-466685.jpeg?auto=compress&cs=tinysrgb&w=1260&h=750&dpr=2'),
+                    ->emptyPanelBackgroundImageUrl(asset('images/background.png')),
                 BreezyCore::make()
                     ->myProfile(
                         hasAvatars: true,
                         slug: 'profile',
-                        userMenuLabel: 'Profile',
+                        userMenuLabel: 'Profil Saya',
                     )
                     ->enableBrowserSessions(),
                 OverlookPlugin::make()
@@ -120,10 +123,10 @@ final class AdminPanelProvider extends PanelProvider
                     ->navigationGroup('Administration')
                     ->navigationSort(4)
                     ->navigationIcon(Phosphor::FileArchiveDuotone),
-                FilamentDeveloperLoginsPlugin::make()
-                    ->enabled(app()->environment('local'))
-                    ->switchable(true)
-                    ->users(fn () => User::pluck('email', 'name')->toArray()),
+                // FilamentDeveloperLoginsPlugin::make()
+                //     ->enabled(app()->environment('local'))
+                //     ->switchable(true)
+                //     ->users(fn () => User::pluck('email', 'name')->toArray()),
             ])
             ->resources([
                 config('filament-logger.activity_resource'),

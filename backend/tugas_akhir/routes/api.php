@@ -9,6 +9,7 @@ use App\Http\Controllers\Api\Mobile\MobileStockController;
 use App\Http\Controllers\Api\Mobile\MobileInboundController;
 use App\Http\Controllers\Api\Mobile\MobileOutboundController;
 use App\Http\Controllers\Api\Mobile\MobileTransactionHistoryController;
+use App\Http\Controllers\Api\Mobile\MobileDashboardController;
 use Illuminate\Support\Facades\Route;
 
 Route::prefix('mobile/v1')->group(function (): void {
@@ -38,6 +39,6 @@ Route::prefix('mobile/v1')->group(function (): void {
         //Routes Riwayat Transaksi
         Route::get('/transactions/history', [MobileTransactionHistoryController::class, 'index']);
 
-        
+        Route::get('/dashboard', [MobileDashboardController::class, 'index']);
     });
 });

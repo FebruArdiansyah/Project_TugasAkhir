@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-
 import '../services/api_service.dart';
 import 'app_bottom_nav.dart';
 import 'detail_barang_keluar.dart';
@@ -121,19 +120,27 @@ class _RiwayatTransaksiScreenState extends State<RiwayatTransaksiScreen> {
         return dateB.compareTo(dateA);
       });
 
+      if (!mounted) return;
+
       setState(() {
         transaksiList = mapped;
         _resetPage();
       });
     } on ApiException catch (e) {
+      if (!mounted) return;
+
       setState(() {
         errorMessage = e.message;
       });
+
       _showSnackBar(e.message, isError: true);
     } catch (e) {
+      if (!mounted) return;
+
       setState(() {
         errorMessage = 'Gagal memuat riwayat transaksi: $e';
       });
+
       _showSnackBar('Gagal memuat riwayat transaksi: $e', isError: true);
     } finally {
       if (mounted) {
@@ -259,7 +266,8 @@ class _RiwayatTransaksiScreenState extends State<RiwayatTransaksiScreen> {
         final supplier = item['supplier'].toString().toLowerCase();
         final warehouse = item['warehouse'].toString().toLowerCase();
         final statusText = item['status'].toString().toLowerCase();
-        final reference = item['referenceNumber']?.toString().toLowerCase() ?? '';
+        final reference =
+            item['referenceNumber']?.toString().toLowerCase() ?? '';
 
         final matched = kode.contains(query) ||
             nama.contains(query) ||
@@ -365,6 +373,7 @@ class _RiwayatTransaksiScreenState extends State<RiwayatTransaksiScreen> {
                         setDialogState(() {
                           dariTanggal = picked;
                         });
+
                         setState(() {
                           _resetPage();
                         });
@@ -389,6 +398,7 @@ class _RiwayatTransaksiScreenState extends State<RiwayatTransaksiScreen> {
                         setDialogState(() {
                           sampaiTanggal = picked;
                         });
+
                         setState(() {
                           _resetPage();
                         });
@@ -430,65 +440,149 @@ class _RiwayatTransaksiScreenState extends State<RiwayatTransaksiScreen> {
     );
   }
 
+  List<Object> _paginationItems() {
+    if (totalPages <= 7) {
+      return List<int>.generate(totalPages, (index) => index + 1);
+    }
+
+    if (currentPage <= 4) {
+      return <Object>[1, 2, 3, 4, 5, '...', totalPages];
+    }
+
+    if (currentPage >= totalPages - 3) {
+      return <Object>[
+        1,
+        '...',
+        totalPages - 4,
+        totalPages - 3,
+        totalPages - 2,
+        totalPages - 1,
+        totalPages,
+      ];
+    }
+
+    return <Object>[
+      1,
+      '...',
+      currentPage - 1,
+      currentPage,
+      currentPage + 1,
+      '...',
+      totalPages,
+    ];
+  }
+
   Widget _buildPagination() {
     if (totalPages <= 1) return const SizedBox.shrink();
 
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.center,
-      children: [
-        IconButton(
-          icon: const Icon(Icons.chevron_left_rounded, size: 20),
-          onPressed: currentPage > 1
-              ? () {
-                  setState(() {
-                    currentPage--;
-                  });
-                }
-              : null,
-        ),
-        ...List.generate(totalPages, (i) {
-          final pageNum = i + 1;
-          final isActive = pageNum == currentPage;
+    final pages = _paginationItems();
 
-          return GestureDetector(
-            onTap: () {
-              setState(() {
-                currentPage = pageNum;
-              });
-            },
-            child: Container(
-              margin: const EdgeInsets.symmetric(horizontal: 4),
-              width: 36,
-              height: 36,
-              alignment: Alignment.center,
-              decoration: BoxDecoration(
-                color: isActive
-                    ? const Color(0xFF2F47B7)
-                    : const Color(0xFFF1F2F6),
-                borderRadius: BorderRadius.circular(6),
-              ),
-              child: Text(
-                '$pageNum',
-                style: TextStyle(
-                  color: isActive ? Colors.white : Colors.black,
-                  fontWeight: FontWeight.bold,
-                  fontSize: 14,
+    return SizedBox(
+      width: double.infinity,
+      height: 48,
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        physics: const BouncingScrollPhysics(),
+        child: ConstrainedBox(
+          constraints: BoxConstraints(
+            minWidth: MediaQuery.of(context).size.width - 24,
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              IconButton(
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints.tightFor(
+                  width: 36,
+                  height: 36,
                 ),
+                icon: const Icon(Icons.chevron_left_rounded, size: 22),
+                onPressed: currentPage > 1
+                    ? () {
+                        setState(() {
+                          currentPage--;
+                        });
+                      }
+                    : null,
               ),
-            ),
-          );
-        }),
-        IconButton(
-          icon: const Icon(Icons.chevron_right_rounded, size: 20),
-          onPressed: currentPage < totalPages
-              ? () {
-                  setState(() {
-                    currentPage++;
-                  });
+              const SizedBox(width: 2),
+              ...pages.map((item) {
+                if (item == '...') {
+                  return _paginationDots();
                 }
-              : null,
+
+                return _pageButton(item as int);
+              }),
+              const SizedBox(width: 2),
+              IconButton(
+                padding: EdgeInsets.zero,
+                constraints: const BoxConstraints.tightFor(
+                  width: 36,
+                  height: 36,
+                ),
+                icon: const Icon(Icons.chevron_right_rounded, size: 22),
+                onPressed: currentPage < totalPages
+                    ? () {
+                        setState(() {
+                          currentPage++;
+                        });
+                      }
+                    : null,
+              ),
+            ],
+          ),
         ),
-      ],
+      ),
+    );
+  }
+
+  Widget _paginationDots() {
+    return Container(
+      width: 22,
+      height: 34,
+      alignment: Alignment.center,
+      child: const Text(
+        '...',
+        style: TextStyle(
+          fontSize: 13,
+          color: Color(0xFF6B7280),
+          fontWeight: FontWeight.w800,
+        ),
+      ),
+    );
+  }
+
+  Widget _pageButton(int pageNum) {
+    final bool isActive = pageNum == currentPage;
+
+    return GestureDetector(
+      onTap: () {
+        setState(() {
+          currentPage = pageNum;
+        });
+      },
+      child: Container(
+        margin: const EdgeInsets.symmetric(horizontal: 3),
+        width: 34,
+        height: 34,
+        alignment: Alignment.center,
+        decoration: BoxDecoration(
+          color: isActive ? const Color(0xFF2F47B7) : const Color(0xFFF1F2F6),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(
+            color:
+                isActive ? const Color(0xFF2F47B7) : const Color(0xFFE5E7EB),
+          ),
+        ),
+        child: Text(
+          '$pageNum',
+          style: TextStyle(
+            color: isActive ? Colors.white : const Color(0xFF111827),
+            fontWeight: FontWeight.w800,
+            fontSize: 13,
+          ),
+        ),
+      ),
     );
   }
 

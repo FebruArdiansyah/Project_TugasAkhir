@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../services/api_service.dart';
 import 'barang_masuk.dart';
 import 'barang_keluar.dart';
 import 'riwayat_transaksi.dart';
@@ -14,59 +15,122 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  final List<Map<String, dynamic>> attentionItems = [
-    {
-      'status': 'Habis',
-      'name': 'QUANTUM - QN1 200x160x20',
-      'qty': '0 PCS',
-      'color': const Color(0xFFEF4444),
-      'bgColor': const Color(0xFFFFECEC),
-    },
-    {
-      'status': 'Menipis',
-      'name': 'INOAC - EON 100x200x10',
-      'qty': '12 PCS',
-      'color': const Color(0xFFF59E0B),
-      'bgColor': const Color(0xFFFFF7ED),
-    },
-    {
-      'status': 'Menipis',
-      'name': 'ROYAL FOAM - RF 180x200x20',
-      'qty': '8 PCS',
-      'color': const Color(0xFFF59E0B),
-      'bgColor': const Color(0xFFFFF7ED),
-    },
-  ];
+  String userName = 'Staff Gudang';
+  String todayLabel = '-';
 
-  final List<Map<String, dynamic>> recentActivities = [
-    {
-      'type': 'Barang Masuk',
-      'code': 'BM-202505-001',
-      'qty': '130 PCS',
-      'time': '20 Mei 2025',
-      'icon': Icons.download_rounded,
-      'color': const Color(0xFF16A34A),
-      'bgColor': const Color(0xFFEFFDF5),
-    },
-    {
-      'type': 'Barang Keluar',
-      'code': 'BK-202505-002',
-      'qty': '50 PCS',
-      'time': '20 Mei 2025',
-      'icon': Icons.upload_rounded,
-      'color': const Color(0xFFEF4444),
-      'bgColor': const Color(0xFFFFECEC),
-    },
-    {
-      'type': 'Barang Masuk',
-      'code': 'BM-202505-003',
-      'qty': '80 PCS',
-      'time': '21 Mei 2025',
-      'icon': Icons.download_rounded,
-      'color': const Color(0xFF16A34A),
-      'bgColor': const Color(0xFFEFFDF5),
-    },
-  ];
+  int totalStock = 0;
+  int amanStock = 0;
+  int menipisStock = 0;
+  int habisStock = 0;
+
+  List<Map<String, dynamic>> attentionItems = [];
+  List<Map<String, dynamic>> recentActivities = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _loadDashboard();
+  }
+
+  Future<void> _loadDashboard() async {
+    try {
+      final response = await ApiService.get('dashboard');
+
+      final Map<String, dynamic> data =
+          response is Map<String, dynamic>
+              ? Map<String, dynamic>.from(response['data'] ?? {})
+              : {};
+
+      final Map<String, dynamic> stockSummary =
+          data['stock_summary'] is Map<String, dynamic>
+              ? Map<String, dynamic>.from(data['stock_summary'])
+              : {};
+
+      final List<dynamic> attentionRaw =
+          data['attention_items'] is List ? data['attention_items'] : [];
+
+      final List<dynamic> activityRaw =
+          data['recent_activities'] is List ? data['recent_activities'] : [];
+
+      if (!mounted) return;
+
+      setState(() {
+        userName = data['user_name']?.toString() ?? 'Staff Gudang';
+        todayLabel = data['today_label']?.toString() ?? '-';
+
+        totalStock =
+            int.tryParse(stockSummary['total']?.toString() ?? '0') ?? 0;
+        amanStock =
+            int.tryParse(stockSummary['aman']?.toString() ?? '0') ?? 0;
+        menipisStock =
+            int.tryParse(stockSummary['menipis']?.toString() ?? '0') ?? 0;
+        habisStock =
+            int.tryParse(stockSummary['habis']?.toString() ?? '0') ?? 0;
+
+        attentionItems = attentionRaw.map<Map<String, dynamic>>((item) {
+          final Map<String, dynamic> row =
+              item is Map<String, dynamic> ? item : {};
+
+          final String status = row['status']?.toString() ?? '-';
+          final bool isHabis = status.toLowerCase() == 'habis';
+
+          return {
+            'status': status,
+            'name': row['name']?.toString() ?? '-',
+            'qty': row['qty']?.toString() ?? '0 PCS',
+            'color': isHabis
+                ? const Color(0xFFEF4444)
+                : const Color(0xFFF59E0B),
+            'bgColor': isHabis
+                ? const Color(0xFFFFECEC)
+                : const Color(0xFFFFF7ED),
+          };
+        }).toList();
+
+        recentActivities = activityRaw.map<Map<String, dynamic>>((item) {
+          final Map<String, dynamic> row =
+              item is Map<String, dynamic> ? item : {};
+
+          final String type = row['type']?.toString() ?? '-';
+          final bool isInbound = type.toLowerCase().contains('masuk');
+
+          return {
+            'type': type,
+            'code': row['code']?.toString() ?? '-',
+            'qty': row['qty']?.toString() ?? '0 PCS',
+            'time': row['time']?.toString() ?? '-',
+            'icon': isInbound
+                ? Icons.download_rounded
+                : Icons.upload_rounded,
+            'color': isInbound
+                ? const Color(0xFF16A34A)
+                : const Color(0xFFEF4444),
+            'bgColor': isInbound
+                ? const Color(0xFFEFFDF5)
+                : const Color(0xFFFFECEC),
+          };
+        }).toList();
+      });
+    } on ApiException catch (e) {
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(e.message),
+          backgroundColor: const Color(0xFFEF4444),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Gagal memuat dashboard: $e'),
+          backgroundColor: const Color(0xFFEF4444),
+        ),
+      );
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -74,22 +138,27 @@ class _HomeScreenState extends State<HomeScreen> {
       backgroundColor: const Color(0xFFE8EEF7),
       bottomNavigationBar: const AppBottomNav(selectedIndex: 0),
       body: SafeArea(
-        child: SingleChildScrollView(
-          physics: const BouncingScrollPhysics(),
-          padding: const EdgeInsets.fromLTRB(14, 14, 14, 18),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              _buildHeader(),
-              const SizedBox(height: 14),
-              _buildQuickActionsSection(),
-              const SizedBox(height: 14),
-              _buildStockSummaryCard(),
-              const SizedBox(height: 14),
-              _buildAttentionSection(),
-              const SizedBox(height: 14),
-              _buildRecentActivitySection(),
-            ],
+        child: RefreshIndicator(
+          onRefresh: _loadDashboard,
+          child: SingleChildScrollView(
+            physics: const AlwaysScrollableScrollPhysics(
+              parent: BouncingScrollPhysics(),
+            ),
+            padding: const EdgeInsets.fromLTRB(14, 14, 14, 18),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _buildHeader(),
+                const SizedBox(height: 14),
+                _buildQuickActionsSection(),
+                const SizedBox(height: 14),
+                _buildStockSummaryCard(),
+                const SizedBox(height: 14),
+                _buildAttentionSection(),
+                const SizedBox(height: 14),
+                _buildRecentActivitySection(),
+              ],
+            ),
           ),
         ),
       ),
@@ -134,9 +203,9 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
                 ),
                 const SizedBox(height: 3),
-                const Text(
-                  'Staff Gudang',
-                  style: TextStyle(
+                Text(
+                  userName,
+                  style: const TextStyle(
                     fontSize: 24,
                     color: Colors.white,
                     fontWeight: FontWeight.w900,
@@ -166,18 +235,18 @@ class _HomeScreenState extends State<HomeScreen> {
                       color: Colors.white.withOpacity(0.20),
                     ),
                   ),
-                  child: const Row(
+                  child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      Icon(
+                      const Icon(
                         Icons.calendar_today_outlined,
                         size: 13,
                         color: Colors.white,
                       ),
-                      SizedBox(width: 6),
+                      const SizedBox(width: 6),
                       Text(
-                        '20 Mei 2025',
-                        style: TextStyle(
+                        todayLabel,
+                        style: const TextStyle(
                           fontSize: 11.5,
                           color: Colors.white,
                           fontWeight: FontWeight.w700,
@@ -357,10 +426,10 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Widget _buildStockSummaryCard() {
-    const int total = 143;
-    const int aman = 128;
-    const int menipis = 12;
-    const int habis = 3;
+    final int total = totalStock;
+    final int aman = amanStock;
+    final int menipis = menipisStock;
+    final int habis = habisStock;
 
     return _sectionContainer(
       child: Column(

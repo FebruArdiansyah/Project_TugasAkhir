@@ -37,8 +37,11 @@ class ApiUploadFile {
 class ApiService {
   static const String baseUrl = String.fromEnvironment(
     'API_BASE_URL',
-    defaultValue: 'http://192.168.100.67/api/mobile/v1',
+    defaultValue: 'http://192.168.0.146/api/mobile/v1',
   );
+
+  //http://IP_LAPTOP_dan_HP/api/mobile/v1 - Untuk Hp
+  //http://localhost/api/mobile/v1 - Untuk Emulator Chrome
 
   static const String _tokenKey = 'mobile_api_token';
   static const Duration _timeout = Duration(seconds: 30);

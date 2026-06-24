@@ -10,11 +10,15 @@ use Illuminate\Support\Facades\DB;
 
 class DataWarehouseOverviewWidget extends StatsOverviewWidget
 {
-    protected ?string $heading = 'Ringkasan Data Warehouse';
+    protected ?string $heading = 'Ringkasan Kinerja Persediaan';
 
     protected static ?int $sort = 1;
 
-    public string $period = 'month';
+    public string $period = 'all';
+
+    public ?string $startDate = null;
+
+    public ?string $endDate = null;
 
     public string|int|null $warehouseId = null;
 
@@ -26,6 +30,7 @@ class DataWarehouseOverviewWidget extends StatsOverviewWidget
     protected function getStats(): array
     {
         $warehouseId = $this->selectedWarehouseId();
+        $periodLabel = $this->periodLabel();
 
         $totalProducts = DB::table('dw_dim_products')->count();
 
@@ -75,61 +80,59 @@ class DataWarehouseOverviewWidget extends StatsOverviewWidget
             ->where('stock_status', 'habis')
             ->count();
 
-        $periodLabel = $this->periodLabel();
-
         return [
-            Stat::make('DW Produk', number_format($totalProducts, 0, ',', '.'))
-                ->description('Total produk di dimensi DW')
+            Stat::make('Produk Terdaftar', number_format($totalProducts, 0, ',', '.'))
+                ->description('Total produk yang tersedia pada data warehouse')
                 ->descriptionIcon('heroicon-m-cube')
                 ->color('primary'),
 
-            Stat::make('DW Gudang', number_format($totalWarehouses, 0, ',', '.'))
-                ->description('Total gudang di dimensi DW')
+            Stat::make('Gudang Terdaftar', number_format($totalWarehouses, 0, ',', '.'))
+                ->description('Total gudang yang tersedia pada data warehouse')
                 ->descriptionIcon('heroicon-m-building-storefront')
                 ->color('info'),
 
-            Stat::make('DW Barang Masuk', number_format($totalInbound, 0, ',', '.'))
-                ->description("Fact inbound {$periodLabel}")
+            Stat::make('Transaksi Barang Masuk', number_format($totalInbound, 0, ',', '.'))
+                ->description("Jumlah transaksi penerimaan barang {$periodLabel}")
                 ->descriptionIcon('heroicon-m-arrow-down-tray')
                 ->color('success'),
 
-            Stat::make('DW Barang Keluar', number_format($totalOutbound, 0, ',', '.'))
-                ->description("Fact outbound {$periodLabel}")
+            Stat::make('Transaksi Barang Keluar', number_format($totalOutbound, 0, ',', '.'))
+                ->description("Jumlah transaksi pengeluaran barang {$periodLabel}")
                 ->descriptionIcon('heroicon-m-arrow-up-tray')
                 ->color('warning'),
 
-            Stat::make('Nilai Inbound Approved', 'Rp ' . number_format((float) $totalInboundValue, 0, ',', '.'))
-                ->description("Nilai masuk approved {$periodLabel}")
+            Stat::make('Nilai Barang Masuk Disetujui', 'Rp ' . number_format((float) $totalInboundValue, 0, ',', '.'))
+                ->description("Total nilai penerimaan barang yang telah disetujui {$periodLabel}")
                 ->descriptionIcon('heroicon-m-banknotes')
                 ->color('success'),
 
-            Stat::make('Nilai Outbound Approved', 'Rp ' . number_format((float) $totalOutboundValue, 0, ',', '.'))
-                ->description("Nilai keluar approved {$periodLabel}")
+            Stat::make('Nilai Barang Keluar Disetujui', 'Rp ' . number_format((float) $totalOutboundValue, 0, ',', '.'))
+                ->description("Total nilai pengeluaran barang yang telah disetujui {$periodLabel}")
                 ->descriptionIcon('heroicon-m-banknotes')
                 ->color('danger'),
 
-            Stat::make('Total Qty Masuk', number_format((float) $totalMovementIn, 0, ',', '.'))
-                ->description("Akumulasi qty_in {$periodLabel}")
+            Stat::make('Kuantitas Barang Masuk', number_format((float) $totalMovementIn, 0, ',', '.'))
+                ->description("Akumulasi kuantitas barang masuk {$periodLabel}")
                 ->descriptionIcon('heroicon-m-plus-circle')
                 ->color('success'),
 
-            Stat::make('Total Qty Keluar', number_format((float) $totalMovementOut, 0, ',', '.'))
-                ->description("Akumulasi qty_out {$periodLabel}")
+            Stat::make('Kuantitas Barang Keluar', number_format((float) $totalMovementOut, 0, ',', '.'))
+                ->description("Akumulasi kuantitas barang keluar {$periodLabel}")
                 ->descriptionIcon('heroicon-m-minus-circle')
                 ->color('danger'),
 
-            Stat::make('Snapshot Aman', number_format($stockAman, 0, ',', '.'))
-                ->description('Snapshot stok terakhir sesuai filter')
+            Stat::make('Stok Aman', number_format($stockAman, 0, ',', '.'))
+                ->description('Jumlah item dengan kondisi stok aman')
                 ->descriptionIcon('heroicon-m-check-circle')
                 ->color('success'),
 
-            Stat::make('Snapshot Menipis', number_format($stockMenipis, 0, ',', '.'))
-                ->description('Snapshot stok terakhir sesuai filter')
+            Stat::make('Stok Perlu Perhatian', number_format($stockMenipis, 0, ',', '.'))
+                ->description('Jumlah item dengan stok mendekati batas minimum')
                 ->descriptionIcon('heroicon-m-exclamation-triangle')
                 ->color('warning'),
 
-            Stat::make('Snapshot Habis', number_format($stockHabis, 0, ',', '.'))
-                ->description('Snapshot stok terakhir sesuai filter')
+            Stat::make('Stok Habis', number_format($stockHabis, 0, ',', '.'))
+                ->description('Jumlah item tanpa stok tersedia')
                 ->descriptionIcon('heroicon-m-x-circle')
                 ->color('danger'),
         ];
@@ -140,7 +143,16 @@ class DataWarehouseOverviewWidget extends StatsOverviewWidget
         $dateRange = $this->dateKeyRange();
 
         if ($dateRange !== null) {
-            $query->whereBetween('date_key', $dateRange);
+            if (! empty($dateRange['start']) && ! empty($dateRange['end'])) {
+                $query->whereBetween('date_key', [
+                    $dateRange['start'],
+                    $dateRange['end'],
+                ]);
+            } elseif (! empty($dateRange['start'])) {
+                $query->where('date_key', '>=', $dateRange['start']);
+            } elseif (! empty($dateRange['end'])) {
+                $query->where('date_key', '<=', $dateRange['end']);
+            }
         }
 
         if ($warehouseId !== null) {
@@ -157,7 +169,16 @@ class DataWarehouseOverviewWidget extends StatsOverviewWidget
         $dateRange = $this->dateKeyRange();
 
         if ($dateRange !== null) {
-            $baseQuery->whereBetween('date_key', $dateRange);
+            if (! empty($dateRange['start']) && ! empty($dateRange['end'])) {
+                $baseQuery->whereBetween('date_key', [
+                    $dateRange['start'],
+                    $dateRange['end'],
+                ]);
+            } elseif (! empty($dateRange['start'])) {
+                $baseQuery->where('date_key', '>=', $dateRange['start']);
+            } elseif (! empty($dateRange['end'])) {
+                $baseQuery->where('date_key', '<=', $dateRange['end']);
+            }
         }
 
         if ($warehouseId !== null) {
@@ -182,37 +203,65 @@ class DataWarehouseOverviewWidget extends StatsOverviewWidget
     }
 
     private function dateKeyRange(): ?array
-{
-    if ($this->period === 'all') {
-        return null;
+    {
+        if ($this->startDate || $this->endDate) {
+            return [
+                'start' => $this->startDate
+                    ? (int) Carbon::parse($this->startDate)->format('Ymd')
+                    : null,
+                'end' => $this->endDate
+                    ? (int) Carbon::parse($this->endDate)->format('Ymd')
+                    : null,
+            ];
+        }
+
+        if ($this->period === 'all') {
+            return null;
+        }
+
+        $now = now();
+
+        if (str_starts_with($this->period, 'year_')) {
+            $year = (int) str_replace('year_', '', $this->period);
+
+            return [
+                'start' => (int) Carbon::create($year, 1, 1)->startOfYear()->format('Ymd'),
+                'end' => (int) Carbon::create($year, 12, 31)->endOfYear()->format('Ymd'),
+            ];
+        }
+
+        [$start, $end] = match ($this->period) {
+            'day' => [
+                $now->copy()->startOfDay(),
+                $now->copy()->endOfDay(),
+            ],
+            'week' => [
+                $now->copy()->startOfWeek(),
+                $now->copy()->endOfWeek(),
+            ],
+            'month' => [
+                $now->copy()->startOfMonth(),
+                $now->copy()->endOfMonth(),
+            ],
+            'year' => [
+                $now->copy()->startOfYear(),
+                $now->copy()->endOfYear(),
+            ],
+            default => [
+                null,
+                null,
+            ],
+        };
+
+        if (! $start || ! $end) {
+            return null;
+        }
+
+        return [
+            'start' => (int) Carbon::parse($start)->format('Ymd'),
+            'end' => (int) Carbon::parse($end)->format('Ymd'),
+        ];
     }
-
-    $now = now();
-
-    [$start, $end] = match ($this->period) {
-        'day' => [
-            $now->copy()->startOfDay(),
-            $now->copy()->endOfDay(),
-        ],
-        'week' => [
-            $now->copy()->startOfWeek(),
-            $now->copy()->endOfWeek(),
-        ],
-        'year' => [
-            $now->copy()->startOfYear(),
-            $now->copy()->endOfYear(),
-        ],
-        default => [
-            $now->copy()->startOfMonth(),
-            $now->copy()->endOfMonth(),
-        ],
-    };
-
-    return [
-        (int) Carbon::parse($start)->format('Ymd'),
-        (int) Carbon::parse($end)->format('Ymd'),
-    ];
-}
 
     private function selectedWarehouseId(): ?int
     {
@@ -225,12 +274,32 @@ class DataWarehouseOverviewWidget extends StatsOverviewWidget
 
     private function periodLabel(): string
     {
+        if ($this->startDate && $this->endDate) {
+            return 'periode ' .
+                Carbon::parse($this->startDate)->format('d M Y') .
+                ' sampai ' .
+                Carbon::parse($this->endDate)->format('d M Y');
+        }
+
+        if ($this->startDate) {
+            return 'mulai ' . Carbon::parse($this->startDate)->format('d M Y');
+        }
+
+        if ($this->endDate) {
+            return 'sampai ' . Carbon::parse($this->endDate)->format('d M Y');
+        }
+
+        if (str_starts_with($this->period, 'year_')) {
+            return 'tahun ' . str_replace('year_', '', $this->period);
+        }
+
         return match ($this->period) {
             'day' => 'hari ini',
             'week' => 'minggu ini',
             'month' => 'bulan ini',
-            'all' => 'semua data',
-            default => 'bulan ini',
+            'year' => 'tahun ini',
+            'all' => 'pada seluruh periode',
+            default => 'pada seluruh periode',
         };
     }
 }
