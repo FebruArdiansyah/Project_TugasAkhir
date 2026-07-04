@@ -8,6 +8,7 @@ import 'pages/barang_keluar.dart';
 import 'pages/tambah_barang_keluar.dart';
 import 'pages/riwayat_transaksi.dart';
 
+
 void main() {
   runApp(const MyApp());
 }

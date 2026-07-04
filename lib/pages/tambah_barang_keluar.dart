@@ -1,11 +1,14 @@
-import 'dart:typed_data';
-
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:image_picker/image_picker.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../models/picked_attachment.dart';
 import '../services/api_service.dart';
+import '../widgets/outbound/outbound_item_card.dart';
+import '../widgets/outbound/outbound_stock_info_card.dart';
+import '../widgets/outbound/outbound_stock_picker.dart';
+import '../widgets/shared/product_logo.dart';
 
 class TambahBarangKeluarScreen extends StatefulWidget {
   final bool isEdit;
@@ -21,6 +24,13 @@ class TambahBarangKeluarScreen extends StatefulWidget {
 }
 
 class _TambahBarangKeluarScreenState extends State<TambahBarangKeluarScreen> {
+  static const Color _bgColor = Color(0xFFF7FAFC);
+  static const Color _primaryRed = Color(0xFFEF4444);
+  static const Color _primaryBlue = Color(0xFF2563EB);
+  static const Color _darkText = Color(0xFF111827);
+  static const Color _softText = Color(0xFF6B7280);
+  static const Color _borderColor = Color(0xFFE5E7EB);
+
   DateTime selectedTanggal = DateTime.now();
 
   final TextEditingController tanggalController = TextEditingController();
@@ -33,30 +43,67 @@ class _TambahBarangKeluarScreenState extends State<TambahBarangKeluarScreen> {
   final TextEditingController qtyController = TextEditingController(text: '1');
   final TextEditingController catatanController = TextEditingController();
   final TextEditingController barangSearchController = TextEditingController();
-  final TextEditingController customerSearchController =
-      TextEditingController();
 
   final ImagePicker _picker = ImagePicker();
 
   bool isLoadingMaster = false;
   bool isSubmitting = false;
+
+  bool isEditArgumentLoaded = false;
+  bool hasAppliedEditDetail = false;
+
+  int? editOutboundId;
+  Map<String, dynamic>? editDetail;
+
   String? errorMessage;
 
   int? selectedCustomerId;
   String? selectedStockKey;
 
-  final List<_PickedAttachment> selectedImages = [];
+  int masterLoadedAtMs = 0;
+  int productLogoRebuildVersion = 0;
+
+  final List<PickedAttachment> selectedImages = [];
   final List<Map<String, dynamic>> selectedItems = [];
 
   List<Map<String, dynamic>> customers = [];
   List<Map<String, dynamic>> warehouses = [];
   List<Map<String, dynamic>> stocks = [];
 
+  static const String _fallbackProductionBaseUrl =
+      'https://febru.djncloud.my.id';
+
   @override
   void initState() {
     super.initState();
+
     tanggalController.text = _formatDate(selectedTanggal);
+    invoiceController.text = _generateReferenceNumber(selectedTanggal);
+
     _loadMasterData();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+
+    if (isEditArgumentLoaded) return;
+
+    final args = ModalRoute.of(context)?.settings.arguments;
+
+    if (args is Map) {
+      editOutboundId = int.tryParse(args['id']?.toString() ?? '');
+
+      final rawDetail = args['detail'];
+
+      if (rawDetail is Map) {
+        editDetail = Map<String, dynamic>.from(rawDetail);
+      }
+    }
+
+    isEditArgumentLoaded = true;
+
+    _tryApplyEditDetail();
   }
 
   @override
@@ -68,7 +115,7 @@ class _TambahBarangKeluarScreenState extends State<TambahBarangKeluarScreen> {
     qtyController.dispose();
     catatanController.dispose();
     barangSearchController.dispose();
-    customerSearchController.dispose();
+
     super.dispose();
   }
 
@@ -89,36 +136,46 @@ class _TambahBarangKeluarScreenState extends State<TambahBarangKeluarScreen> {
       final loadedWarehouses = _extractList(warehouseResponse);
       final loadedStocks = _extractList(stockResponse);
 
+      if (!mounted) return;
+
       setState(() {
         customers = loadedCustomers;
         warehouses = loadedWarehouses;
         stocks = loadedStocks;
+        masterLoadedAtMs = DateTime.now().millisecondsSinceEpoch;
 
-        if (customers.isNotEmpty && selectedCustomerId == null) {
-          _selectCustomer(customers.first, updateState: false);
-        }
+        if (!widget.isEdit) {
+          selectedCustomerId = null;
+          tujuanController.clear();
 
-        if (stocks.isNotEmpty && selectedStockKey == null) {
-          final availableStocks = stocks.where((item) {
-            return _availableQty(item) > 0;
-          }).toList();
+          if (stocks.isNotEmpty && selectedStockKey == null) {
+            final availableStocks = stocks.where((item) {
+              return _availableQty(item) > 0;
+            }).toList();
 
-          if (availableStocks.isNotEmpty) {
-            _selectStock(availableStocks.first, updateState: false);
-          } else {
-            _selectStock(stocks.first, updateState: false);
+            if (availableStocks.isNotEmpty) {
+              _selectStock(availableStocks.first, updateState: false);
+            }
           }
         }
       });
+
+      _tryApplyEditDetail();
     } on ApiException catch (e) {
+      if (!mounted) return;
+
       setState(() {
         errorMessage = e.message;
       });
+
       _showSnackBar(e.message, isError: true);
     } catch (e) {
+      if (!mounted) return;
+
       setState(() {
         errorMessage = 'Gagal memuat data master: $e';
       });
+
       _showSnackBar('Gagal memuat data master: $e', isError: true);
     } finally {
       if (mounted) {
@@ -127,6 +184,282 @@ class _TambahBarangKeluarScreenState extends State<TambahBarangKeluarScreen> {
         });
       }
     }
+  }
+
+  void _tryApplyEditDetail() {
+    if (!widget.isEdit) return;
+    if (hasAppliedEditDetail) return;
+    if (editDetail == null) return;
+    if (stocks.isEmpty) return;
+
+    _applyEditDetail(editDetail!);
+  }
+
+  void _applyEditDetail(Map<String, dynamic> data) {
+    if (hasAppliedEditDetail) return;
+
+    final transactionDate = _parseDate(data['transaction_date']);
+    final customerMap = _asMap(data['customer']);
+    final itemList = _asMapList(data['items']);
+
+    final customerId = _toInt(data['customer_id'] ?? customerMap['id']);
+    final matchedCustomer = _findById(customers, customerId) ?? customerMap;
+
+    final List<Map<String, dynamic>> loadedItems = [];
+
+    for (final item in itemList) {
+      loadedItems.add(_outboundItemFromEditItem(item));
+    }
+
+    setState(() {
+      if (transactionDate != null) {
+        selectedTanggal = transactionDate;
+        tanggalController.text = _formatDate(transactionDate);
+      }
+
+      final outboundType = _cleanText(data['outbound_type']);
+      jenisKeluarController.text =
+          outboundType.isNotEmpty ? outboundType : 'Penjualan';
+
+      final referenceNumber = _cleanText(data['reference_number']);
+      final invoiceNumber = _cleanText(data['invoice_number']);
+
+      if (referenceNumber.isNotEmpty) {
+        invoiceController.text = referenceNumber;
+      } else if (invoiceNumber.isNotEmpty) {
+        invoiceController.text = invoiceNumber;
+      }
+
+      if (customerId > 0) {
+        selectedCustomerId = customerId;
+      }
+
+      if (matchedCustomer.isNotEmpty) {
+        tujuanController.text = _customerName(matchedCustomer);
+      }
+
+      catatanController.text = _cleanText(data['note']);
+
+      selectedItems
+        ..clear()
+        ..addAll(loadedItems);
+
+      if (selectedItems.isNotEmpty) {
+        selectedStockKey = selectedItems.first['stock_key']?.toString();
+      }
+
+      productLogoRebuildVersion++;
+      hasAppliedEditDetail = true;
+    });
+  }
+
+  Map<String, dynamic> _outboundItemFromEditItem(Map<String, dynamic> item) {
+    final productId = _toInt(item['product_id']);
+    final warehouseId = _toInt(item['warehouse_id']);
+
+    final matchedStock = _findStockForEditItem(item);
+
+    final stockBalanceId = _toInt(
+      item['stock_balance_id'] ??
+          item['stock_id'] ??
+          matchedStock?['id'] ??
+          item['id'],
+    );
+
+    final stockKey = matchedStock == null
+        ? '$stockBalanceId-$productId-$warehouseId'
+        : _stockKey(matchedStock);
+
+    final oldItemId = _toInt(
+      item['id'] ??
+          item['outbound_item_id'] ??
+          item['transaction_item_id'] ??
+          item['item_id'] ??
+          item['detail_id'],
+    );
+
+    final productCode = _firstNonEmpty([
+      item['product_code'],
+      item['code'],
+      matchedStock?['product_code'],
+      matchedStock?['code'],
+    ]);
+
+    final productName = _firstNonEmpty([
+      item['product_name'],
+      item['product_display_name'],
+      item['name'],
+      matchedStock?['product_display_name'],
+      matchedStock?['product_name'],
+      matchedStock?['name'],
+    ]);
+
+    final sizeText = _firstNonEmpty([
+      item['product_size_text'],
+      item['size_text'],
+      item['ukuran'],
+      matchedStock?['product_size_text'],
+      matchedStock?['size_text'],
+    ]);
+
+    final unitName = _firstNonEmpty(
+      [
+        item['unit_name'],
+        item['satuan'],
+        matchedStock?['unit_name'],
+      ],
+      fallback: 'PCS',
+    );
+
+    final warehouseName = _firstNonEmpty([
+      item['warehouse_name'],
+      item['gudang'],
+      matchedStock?['warehouse_name'],
+    ]);
+
+    final qty = _toDouble(item['qty']);
+
+    final stokAwal = _toDouble(
+      item['available_stock'] ??
+          item['stock_available'] ??
+          item['remaining_stock'] ??
+          item['stock_after'] ??
+          matchedStock?['available_qty'] ??
+          matchedStock?['qty_available'] ??
+          matchedStock?['stock'] ??
+          matchedStock?['qty_on_hand'] ??
+          matchedStock?['available_stock'],
+    );
+
+    final logoPath = _firstNonEmpty(
+      [
+        item['logo_path'],
+        item['product_logo_path'],
+        matchedStock?['logo_path'],
+        matchedStock?['product_logo_path'],
+      ],
+      fallback: '',
+    );
+
+    final logoUrl = _firstNonEmpty(
+      [
+        item['logo_url'],
+        item['product_logo_url'],
+        matchedStock?['logo_url'],
+        matchedStock?['product_logo_url'],
+      ],
+      fallback: '',
+    );
+
+    return {
+      'id': oldItemId,
+      'outbound_item_id': oldItemId,
+      'transaction_item_id': oldItemId,
+      'item_id': oldItemId,
+      'detail_id': oldItemId,
+      'stock_key': stockKey,
+      'stock_balance_id': stockBalanceId,
+      'product_id': productId,
+      'warehouse_id': warehouseId,
+      'code': productCode,
+      'name': productName,
+      'ukuran': sizeText,
+      'qty': qty,
+      'satuan': unitName,
+      'gudang': warehouseName,
+      'stokAwal': stokAwal + qty,
+      'type_name': _firstNonEmpty(
+        [
+          item['type_name'],
+          item['product_type_name'],
+          matchedStock?['type_name'],
+          matchedStock?['product_type_name'],
+        ],
+        fallback: 'UMUM',
+      ),
+      'density_name': _firstNonEmpty(
+        [
+          item['density_name'],
+          item['product_density_name'],
+          matchedStock?['density_name'],
+          matchedStock?['product_density_name'],
+        ],
+        fallback: 'UMUM',
+      ),
+      'category_name': _firstNonEmpty(
+        [
+          item['category_name'],
+          item['product_category_name'],
+          matchedStock?['category_name'],
+          matchedStock?['product_category_name'],
+        ],
+        fallback: 'UMUM',
+      ),
+      'logo_path': logoPath.isEmpty ? null : logoPath,
+      'product_logo_path': logoPath.isEmpty ? null : logoPath,
+      'logo_url': logoUrl.isEmpty ? null : logoUrl,
+      'product_logo_url': logoUrl.isEmpty ? null : logoUrl,
+    };
+  }
+
+  Map<String, dynamic>? _findStockForEditItem(Map<String, dynamic> item) {
+    final stockBalanceId = _toInt(item['stock_balance_id'] ?? item['stock_id']);
+    final productId = _toInt(item['product_id']);
+    final warehouseId = _toInt(item['warehouse_id']);
+
+    if (stockBalanceId > 0) {
+      for (final stock in stocks) {
+        if (_toInt(stock['id']) == stockBalanceId) {
+          return stock;
+        }
+      }
+    }
+
+    for (final stock in stocks) {
+      if (_toInt(stock['product_id']) == productId &&
+          _toInt(stock['warehouse_id']) == warehouseId) {
+        return stock;
+      }
+    }
+
+    for (final stock in stocks) {
+      if (_toInt(stock['product_id']) == productId) {
+        return stock;
+      }
+    }
+
+    return null;
+  }
+
+  Map<String, dynamic> _asMap(dynamic value) {
+    if (value is Map<String, dynamic>) return value;
+
+    if (value is Map) {
+      return Map<String, dynamic>.from(value);
+    }
+
+    return {};
+  }
+
+  List<Map<String, dynamic>> _asMapList(dynamic value) {
+    if (value is List) {
+      return value
+          .whereType<Map>()
+          .map((item) => Map<String, dynamic>.from(item))
+          .toList();
+    }
+
+    return [];
+  }
+
+  DateTime? _parseDate(dynamic value) {
+    if (value == null) return null;
+
+    final raw = value.toString().trim();
+
+    if (raw.isEmpty) return null;
+
+    return DateTime.tryParse(raw);
   }
 
   List<Map<String, dynamic>> _extractList(dynamic response) {
@@ -142,10 +475,6 @@ class _TambahBarangKeluarScreenState extends State<TambahBarangKeluarScreen> {
     }
 
     return [];
-  }
-
-  Map<String, dynamic>? get selectedCustomer {
-    return _findById(customers, selectedCustomerId);
   }
 
   Map<String, dynamic>? get selectedStock {
@@ -164,7 +493,7 @@ class _TambahBarangKeluarScreenState extends State<TambahBarangKeluarScreen> {
     List<Map<String, dynamic>> list,
     int? id,
   ) {
-    if (id == null) return null;
+    if (id == null || id <= 0) return null;
 
     for (final item in list) {
       if (_toInt(item['id']) == id) {
@@ -221,34 +550,21 @@ class _TambahBarangKeluarScreenState extends State<TambahBarangKeluarScreen> {
   bool get stokTidakCukup => qtyKeluar > stokTersediaSetelahDipilih;
 
   bool get itemTidakValid {
-    return selectedStock == null || qtyKosongAtauNol || barangHabis || stokTidakCukup;
+    return selectedStock == null ||
+        qtyKosongAtauNol ||
+        barangHabis ||
+        stokTidakCukup;
   }
 
-  bool get formTidakValid => selectedItems.isEmpty || selectedCustomerId == null;
+  bool get formTidakValid {
+  return selectedItems.isEmpty || tujuanController.text.trim().isEmpty;
+}
 
   double get totalQtyBarangKeluar {
     return selectedItems.fold<double>(
       0,
       (total, item) => total + _toDouble(item['qty']),
     );
-  }
-
-  List<Map<String, dynamic>> get filteredStockList {
-    final query = barangSearchController.text.trim().toLowerCase();
-
-    if (query.isEmpty) {
-      return stocks;
-    }
-
-    return stocks.where((item) {
-      final code = _stockProductCode(item).toLowerCase();
-      final name = _stockProductName(item).toLowerCase();
-      final gudang = _stockWarehouseName(item).toLowerCase();
-
-      return code.contains(query) ||
-          name.contains(query) ||
-          gudang.contains(query);
-    }).toList();
   }
 
   int _toInt(dynamic value) {
@@ -314,6 +630,14 @@ class _TambahBarangKeluarScreenState extends State<TambahBarangKeluarScreen> {
     return '${date.year}-$month-$day';
   }
 
+  String _generateReferenceNumber(DateTime date) {
+    final year = date.year.toString();
+    final month = date.month.toString().padLeft(2, '0');
+    final day = date.day.toString().padLeft(2, '0');
+
+    return 'INV-NAURA-$year$month$day-0001';
+  }
+
   String _cleanText(dynamic value) {
     if (value == null) return '';
 
@@ -334,39 +658,70 @@ class _TambahBarangKeluarScreenState extends State<TambahBarangKeluarScreen> {
     return '-';
   }
 
+  Map<String, dynamic> _productMap(Map<String, dynamic> item) {
+    final product = item['product'];
+
+    if (product is Map) {
+      return Map<String, dynamic>.from(product);
+    }
+
+    return {};
+  }
+
+  String _firstNonEmpty(List<dynamic> values, {String fallback = '-'}) {
+    for (final value in values) {
+      final text = _cleanText(value);
+
+      if (text.isNotEmpty && text != '-') {
+        return text;
+      }
+    }
+
+    return fallback;
+  }
+
   String _stockProductName(Map<String, dynamic> item) {
-    final displayName = _cleanText(item['product_display_name']);
-    final productName = _cleanText(item['product_name']);
-    final name = _cleanText(item['name']);
+    final product = _productMap(item);
 
-    if (displayName.isNotEmpty) return displayName;
-    if (productName.isNotEmpty) return productName;
-    if (name.isNotEmpty) return name;
-
-    return '-';
+    return _firstNonEmpty([
+      item['product_display_name'],
+      item['product_name'],
+      item['name'],
+      product['display_name'],
+      product['full_name'],
+      product['name'],
+    ]);
   }
 
   String _stockProductCode(Map<String, dynamic> item) {
-    final productCode = _cleanText(item['product_code']);
-    final code = _cleanText(item['code']);
+    final product = _productMap(item);
 
-    if (productCode.isNotEmpty) return productCode;
-    if (code.isNotEmpty) return code;
-
-    return '-';
+    return _firstNonEmpty([
+      item['product_code'],
+      item['code'],
+      product['code'],
+    ]);
   }
 
   String _stockUnit(Map<String, dynamic> item) {
-    final unitName = _cleanText(item['unit_name']);
+    final product = _productMap(item);
     final unit = item['unit'];
+    final productUnit = product['unit'];
 
-    if (unitName.isNotEmpty) return unitName;
+    if (_cleanText(item['unit_name']).isNotEmpty) {
+      return _cleanText(item['unit_name']);
+    }
 
-    if (unit is Map) {
-      final unitMap = Map<String, dynamic>.from(unit);
-      final name = _cleanText(unitMap['name']);
+    if (unit is Map && _cleanText(unit['name']).isNotEmpty) {
+      return _cleanText(unit['name']);
+    }
 
-      if (name.isNotEmpty) return name;
+    if (_cleanText(product['unit_name']).isNotEmpty) {
+      return _cleanText(product['unit_name']);
+    }
+
+    if (productUnit is Map && _cleanText(productUnit['name']).isNotEmpty) {
+      return _cleanText(productUnit['name']);
     }
 
     return 'PCS';
@@ -397,39 +752,199 @@ class _TambahBarangKeluarScreenState extends State<TambahBarangKeluarScreen> {
     return '-';
   }
 
-  String _stockWarehouseCode(Map<String, dynamic> item) {
-    final warehouseCode = _cleanText(item['warehouse_code']);
+  String _stockSize(Map<String, dynamic> item) {
+    final product = _productMap(item);
 
-    if (warehouseCode.isNotEmpty) return warehouseCode;
+    return _firstNonEmpty([
+      item['product_size_text'],
+      item['size_text'],
+      product['product_size_text'],
+      product['size_text'],
+    ]);
+  }
 
-    final warehouse = item['warehouse'];
+  String _stockType(Map<String, dynamic> item) {
+    final product = _productMap(item);
+    final productType = product['product_type'];
 
-    if (warehouse is Map) {
-      final warehouseMap = Map<String, dynamic>.from(warehouse);
-      final code = _cleanText(warehouseMap['code']);
-
-      if (code.isNotEmpty) return code;
+    if (_cleanText(item['type_name']).isNotEmpty) {
+      return _cleanText(item['type_name']);
     }
 
-    final warehouseId = _toInt(item['warehouse_id']);
+    if (_cleanText(item['product_type_name']).isNotEmpty) {
+      return _cleanText(item['product_type_name']);
+    }
 
-    for (final warehouseItem in warehouses) {
-      if (_toInt(warehouseItem['id']) == warehouseId) {
-        return _cleanText(warehouseItem['code']);
+    if (_cleanText(product['type_name']).isNotEmpty) {
+      return _cleanText(product['type_name']);
+    }
+
+    if (_cleanText(product['product_type_name']).isNotEmpty) {
+      return _cleanText(product['product_type_name']);
+    }
+
+    if (productType is Map && _cleanText(productType['name']).isNotEmpty) {
+      return _cleanText(productType['name']);
+    }
+
+    return 'UMUM';
+  }
+
+  String _stockDensity(Map<String, dynamic> item) {
+    final product = _productMap(item);
+    final density = product['product_density'];
+
+    if (_cleanText(item['density_name']).isNotEmpty) {
+      return _cleanText(item['density_name']);
+    }
+
+    if (_cleanText(item['product_density_name']).isNotEmpty) {
+      return _cleanText(item['product_density_name']);
+    }
+
+    if (_cleanText(product['density_name']).isNotEmpty) {
+      return _cleanText(product['density_name']);
+    }
+
+    if (_cleanText(product['product_density_name']).isNotEmpty) {
+      return _cleanText(product['product_density_name']);
+    }
+
+    if (density is Map && _cleanText(density['name']).isNotEmpty) {
+      return _cleanText(density['name']);
+    }
+
+    return 'UMUM';
+  }
+
+  String _stockCategory(Map<String, dynamic> item) {
+    final product = _productMap(item);
+    final category = product['product_category'];
+
+    if (_cleanText(item['category_name']).isNotEmpty) {
+      return _cleanText(item['category_name']);
+    }
+
+    if (_cleanText(item['product_category_name']).isNotEmpty) {
+      return _cleanText(item['product_category_name']);
+    }
+
+    if (_cleanText(product['category_name']).isNotEmpty) {
+      return _cleanText(product['category_name']);
+    }
+
+    if (_cleanText(product['product_category_name']).isNotEmpty) {
+      return _cleanText(product['product_category_name']);
+    }
+
+    if (category is Map && _cleanText(category['name']).isNotEmpty) {
+      return _cleanText(category['name']);
+    }
+
+    return 'UMUM';
+  }
+
+  String? _extractLogoPath(Map<String, dynamic> item) {
+    final product = _productMap(item);
+
+    final candidates = [
+      item['logo_path'],
+      item['product_logo_path'],
+      product['logo_path'],
+      product['product_logo_path'],
+    ];
+
+    for (final candidate in candidates) {
+      final text = _cleanText(candidate);
+
+      if (text.isNotEmpty) {
+        return text;
       }
     }
 
-    return '-';
+    return null;
   }
 
-  String _stockSize(Map<String, dynamic> item) {
-    final sizeText = _cleanText(item['product_size_text']);
-    final size = _cleanText(item['size_text']);
+  String? _extractLogoUrl(Map<String, dynamic> item) {
+    final product = _productMap(item);
 
-    if (sizeText.isNotEmpty) return sizeText;
-    if (size.isNotEmpty) return size;
+    final candidates = [
+      item['logo_url'],
+      item['product_logo_url'],
+      product['logo_url'],
+      product['product_logo_url'],
+    ];
 
-    return '-';
+    for (final candidate in candidates) {
+      final text = _cleanText(candidate);
+
+      if (text.isNotEmpty) {
+        return text;
+      }
+    }
+
+    return null;
+  }
+
+  Map<String, dynamic> _stockLogoItem(Map<String, dynamic> item) {
+    final product = item['product'];
+
+    Map<String, dynamic> productMap = {};
+
+    if (product is Map) {
+      productMap = Map<String, dynamic>.from(product);
+    }
+
+    return {
+      ...item,
+      'id': item['product_id'] ?? productMap['id'] ?? item['id'],
+      'code': item['product_code'] ?? productMap['code'] ?? item['code'],
+      'name': item['product_name'] ??
+          item['product_display_name'] ??
+          productMap['name'] ??
+          item['name'],
+      'display_name': item['product_display_name'] ??
+          item['product_name'] ??
+          productMap['display_name'] ??
+          productMap['full_name'] ??
+          productMap['name'] ??
+          item['name'],
+      'full_name': item['product_display_name'] ??
+          productMap['full_name'] ??
+          item['product_name'] ??
+          item['name'],
+      'logo_path': item['logo_path'] ??
+          item['product_logo_path'] ??
+          productMap['logo_path'] ??
+          productMap['product_logo_path'],
+      'product_logo_path': item['product_logo_path'] ??
+          item['logo_path'] ??
+          productMap['product_logo_path'] ??
+          productMap['logo_path'],
+      'logo_url': item['logo_url'] ??
+          item['product_logo_url'] ??
+          productMap['logo_url'] ??
+          productMap['product_logo_url'],
+      'product_logo_url': item['product_logo_url'] ??
+          item['logo_url'] ??
+          productMap['product_logo_url'] ??
+          productMap['logo_url'],
+    };
+  }
+
+  Widget _buildProductLogo(
+    Map<String, dynamic> item, {
+    double size = 40,
+    bool selected = false,
+  }) {
+    return ProductLogo(
+      item: _stockLogoItem(item),
+      size: size,
+      selected: selected,
+      fallbackBaseUrl: _fallbackProductionBaseUrl,
+      masterLoadedAtMs: masterLoadedAtMs,
+      rebuildVersion: productLogoRebuildVersion,
+    );
   }
 
   Future<void> _pickTanggal() async {
@@ -438,6 +953,18 @@ class _TambahBarangKeluarScreenState extends State<TambahBarangKeluarScreen> {
       initialDate: selectedTanggal,
       firstDate: DateTime(2020),
       lastDate: DateTime(2035),
+      builder: (context, child) {
+        return Theme(
+          data: Theme.of(context).copyWith(
+            colorScheme: const ColorScheme.light(
+              primary: _primaryRed,
+              onPrimary: Colors.white,
+              onSurface: _darkText,
+            ),
+          ),
+          child: child ?? const SizedBox.shrink(),
+        );
+      },
     );
 
     if (picked == null) return;
@@ -445,24 +972,13 @@ class _TambahBarangKeluarScreenState extends State<TambahBarangKeluarScreen> {
     setState(() {
       selectedTanggal = picked;
       tanggalController.text = _formatDate(picked);
+
+      if (!widget.isEdit) {
+        invoiceController.text = _generateReferenceNumber(picked);
+      }
     });
   }
 
-  void _selectCustomer(
-    Map<String, dynamic> item, {
-    bool updateState = true,
-  }) {
-    void apply() {
-      selectedCustomerId = _toInt(item['id']);
-      tujuanController.text = _customerName(item);
-    }
-
-    if (updateState) {
-      setState(apply);
-    } else {
-      apply();
-    }
-  }
 
   void _selectStock(
     Map<String, dynamic> item, {
@@ -471,6 +987,7 @@ class _TambahBarangKeluarScreenState extends State<TambahBarangKeluarScreen> {
     void apply() {
       selectedStockKey = _stockKey(item);
       qtyController.text = '1';
+      productLogoRebuildVersion++;
     }
 
     if (updateState) {
@@ -539,6 +1056,13 @@ class _TambahBarangKeluarScreenState extends State<TambahBarangKeluarScreen> {
           'satuan': _stockUnit(stock),
           'gudang': _stockWarehouseName(stock),
           'stokAwal': _availableQty(stock),
+          'type_name': _stockType(stock),
+          'density_name': _stockDensity(stock),
+          'category_name': _stockCategory(stock),
+          'logo_path': _extractLogoPath(stock),
+          'product_logo_path': _extractLogoPath(stock),
+          'logo_url': _extractLogoUrl(stock),
+          'product_logo_url': _extractLogoUrl(stock),
         });
       }
 
@@ -577,6 +1101,7 @@ class _TambahBarangKeluarScreenState extends State<TambahBarangKeluarScreen> {
     setState(() {
       selectedStockKey = _stockKey(stock);
       qtyController.text = '1';
+      productLogoRebuildVersion++;
     });
 
     _addSelectedStockToList(1);
@@ -596,13 +1121,17 @@ class _TambahBarangKeluarScreenState extends State<TambahBarangKeluarScreen> {
       orElse: () => {},
     );
 
+    final currentQty = _toDouble(item['qty']);
+
     if (stock.isEmpty) {
-      _showSnackBar('Data stok tidak ditemukan.', isError: true);
+      setState(() {
+        selectedItems[index]['qty'] = currentQty + 1;
+      });
+
       return;
     }
 
-    final stok = _availableQty(stock);
-    final currentQty = _toDouble(item['qty']);
+    final stok = _availableQty(stock) + currentQty;
 
     if (currentQty + 1 > stok) {
       _showSnackBar('Qty sudah mencapai stok tersedia.', isError: true);
@@ -655,7 +1184,7 @@ class _TambahBarangKeluarScreenState extends State<TambahBarangKeluarScreen> {
 
     final XFile? image = await _picker.pickImage(
       source: ImageSource.camera,
-      imageQuality: 60,
+      imageQuality: 80,
       maxWidth: 1280,
       maxHeight: 1280,
     );
@@ -666,7 +1195,7 @@ class _TambahBarangKeluarScreenState extends State<TambahBarangKeluarScreen> {
 
     setState(() {
       selectedImages.add(
-        _PickedAttachment(
+        PickedAttachment(
           bytes: bytes,
           fileName: image.name.isEmpty
               ? 'outbound-camera-${DateTime.now().millisecondsSinceEpoch}.jpg'
@@ -683,7 +1212,7 @@ class _TambahBarangKeluarScreenState extends State<TambahBarangKeluarScreen> {
     }
 
     final List<XFile> images = await _picker.pickMultiImage(
-      imageQuality: 60,
+      imageQuality: 80,
       maxWidth: 1280,
       maxHeight: 1280,
     );
@@ -696,7 +1225,7 @@ class _TambahBarangKeluarScreenState extends State<TambahBarangKeluarScreen> {
       final bytes = await img.readAsBytes();
 
       selectedImages.add(
-        _PickedAttachment(
+        PickedAttachment(
           bytes: bytes,
           fileName: img.name.isEmpty
               ? 'outbound-gallery-${DateTime.now().millisecondsSinceEpoch}.jpg'
@@ -727,22 +1256,16 @@ class _TambahBarangKeluarScreenState extends State<TambahBarangKeluarScreen> {
   Future<void> _submitForm() async {
     if (isSubmitting) return;
 
-    if (widget.isEdit) {
-      _showSnackBar(
-        'Mode edit belum disambungkan. Untuk sementara buat pengajuan baru.',
-        isError: true,
-      );
-      return;
-    }
-
-    if (selectedCustomerId == null) {
-      _showSnackBar('Pilih customer / tujuan terlebih dahulu.', isError: true);
+    if (tujuanController.text.trim().isEmpty) {
+      _showSnackBar('Isi customer / tujuan terlebih dahulu.', isError: true);
       return;
     }
 
     if (selectedItems.isEmpty) {
-      _showSnackBar('Tambahkan minimal 1 barang terlebih dahulu.',
-          isError: true);
+      _showSnackBar(
+        'Tambahkan minimal 1 barang terlebih dahulu.',
+        isError: true,
+      );
       return;
     }
 
@@ -750,6 +1273,14 @@ class _TambahBarangKeluarScreenState extends State<TambahBarangKeluarScreen> {
 
     if (warehouseId <= 0) {
       _showSnackBar('Gudang asal tidak valid.', isError: true);
+      return;
+    }
+
+    if (widget.isEdit && (editOutboundId == null || editOutboundId! <= 0)) {
+      _showSnackBar(
+        'ID pengajuan barang keluar tidak ditemukan.',
+        isError: true,
+      );
       return;
     }
 
@@ -764,13 +1295,25 @@ class _TambahBarangKeluarScreenState extends State<TambahBarangKeluarScreen> {
         throw ApiException(message: 'Token login tidak ditemukan.');
       }
 
-      final uri = Uri.parse('${ApiService.baseUrl}/outbounds');
+      final bool isEditing = widget.isEdit && editOutboundId != null;
+
+      final uri = Uri.parse(
+        isEditing
+            ? '${ApiService.baseUrl}/outbounds/$editOutboundId'
+            : '${ApiService.baseUrl}/outbounds',
+      );
+
       final request = http.MultipartRequest('POST', uri);
 
       request.headers.addAll({
         'Accept': 'application/json',
         'Authorization': 'Bearer $token',
+        if (isEditing) 'X-HTTP-Method-Override': 'PUT',
       });
+
+      if (isEditing) {
+        request.fields['_method'] = 'PUT';
+      }
 
       request.fields.addAll({
         'transaction_date': _apiDate(selectedTanggal),
@@ -778,13 +1321,25 @@ class _TambahBarangKeluarScreenState extends State<TambahBarangKeluarScreen> {
             ? 'Penjualan'
             : jenisKeluarController.text.trim(),
         'reference_number': invoiceController.text.trim(),
-        'customer_id': selectedCustomerId.toString(),
+        'customer_name': tujuanController.text.trim(),
         'warehouse_id': warehouseId.toString(),
         'note': catatanController.text.trim(),
       });
 
       for (int i = 0; i < selectedItems.length; i++) {
         final item = selectedItems[i];
+
+        final oldItemId = _toInt(
+          item['outbound_item_id'] ??
+              item['transaction_item_id'] ??
+              item['item_id'] ??
+              item['detail_id'] ??
+              item['id'],
+        );
+
+        if (isEditing && oldItemId > 0) {
+          request.fields['items[$i][id]'] = oldItemId.toString();
+        }
 
         request.fields['items[$i][product_id]'] =
             _toInt(item['product_id']).toString();
@@ -811,8 +1366,9 @@ class _TambahBarangKeluarScreenState extends State<TambahBarangKeluarScreen> {
 
       if (response.statusCode < 200 || response.statusCode >= 300) {
         throw ApiException(
-          message:
-              'Gagal submit barang keluar. Status: ${response.statusCode}. ${response.body}',
+          message: isEditing
+              ? 'Gagal memperbarui barang keluar. Status: ${response.statusCode}. ${response.body}'
+              : 'Gagal submit barang keluar. Status: ${response.statusCode}. ${response.body}',
           statusCode: response.statusCode,
         );
       }
@@ -820,14 +1376,21 @@ class _TambahBarangKeluarScreenState extends State<TambahBarangKeluarScreen> {
       if (!mounted) return;
 
       _showSnackBar(
-        'Pengajuan barang keluar berhasil dikirim. Menunggu approval admin.',
+        isEditing
+            ? 'Pengajuan barang keluar berhasil diperbarui.'
+            : 'Pengajuan barang keluar berhasil dikirim. Menunggu approval admin.',
       );
 
       Navigator.pop(context, true);
     } on ApiException catch (e) {
       _showSnackBar(e.message, isError: true);
     } catch (e) {
-      _showSnackBar('Gagal submit barang keluar: $e', isError: true);
+      _showSnackBar(
+        widget.isEdit
+            ? 'Gagal memperbarui barang keluar: $e'
+            : 'Gagal submit barang keluar: $e',
+        isError: true,
+      );
     } finally {
       if (mounted) {
         setState(() {
@@ -837,230 +1400,68 @@ class _TambahBarangKeluarScreenState extends State<TambahBarangKeluarScreen> {
     }
   }
 
-  void _showSnackBar(String message, {bool isError = false}) {
-    if (!mounted) return;
-
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(message),
-        backgroundColor:
-            isError ? const Color(0xFFEF4444) : const Color(0xFF16A34A),
-        behavior: SnackBarBehavior.floating,
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     final stock = selectedStock;
 
     return Scaffold(
-      backgroundColor: const Color(0xFFE8EEF7),
+      backgroundColor: _bgColor,
       bottomNavigationBar: _buildBottomButton(),
-      body: SafeArea(
-        child: Column(
-          children: [
-            _buildAppBar(),
-            Expanded(
-              child: RefreshIndicator(
-                onRefresh: _loadMasterData,
-                child: SingleChildScrollView(
-                  physics: const AlwaysScrollableScrollPhysics(
-                    parent: BouncingScrollPhysics(),
-                  ),
-                  padding: const EdgeInsets.fromLTRB(14, 14, 14, 18),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      _buildInfoBanner(),
-                      if (isLoadingMaster) ...[
-                        const SizedBox(height: 10),
-                        ClipRRect(
-                          borderRadius: BorderRadius.circular(999),
-                          child: const LinearProgressIndicator(
-                            minHeight: 4,
-                            backgroundColor: Color(0xFFE5E7EB),
-                            color: Color(0xFFEF4444),
-                          ),
-                        ),
-                      ],
-                      if (errorMessage != null) ...[
-                        const SizedBox(height: 10),
-                        _buildErrorBanner(),
-                      ],
-                      const SizedBox(height: 14),
-                      _buildDocumentSection(),
-                      const SizedBox(height: 14),
-                      _buildDetailBarangSection(stock),
-                      const SizedBox(height: 14),
-                      _buildSelectedItemsSection(),
-                      const SizedBox(height: 14),
-                      _buildAttachmentSection(),
-                      const SizedBox(height: 12),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildErrorBanner() {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: const Color(0xFFFFE4E6),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(
-          color: const Color(0xFFFCA5A5),
-        ),
-      ),
-      child: Row(
+      body: Stack(
         children: [
-          const Icon(
-            Icons.warning_amber_rounded,
-            color: Color(0xFFEF4444),
-            size: 20,
-          ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Text(
-              errorMessage ?? 'Terjadi kesalahan.',
-              style: const TextStyle(
-                fontSize: 11.5,
-                color: Color(0xFF991B1B),
-                fontWeight: FontWeight.w700,
-              ),
+          const Positioned.fill(
+            child: CustomPaint(
+              painter: _OutboundFormBackgroundPainter(),
             ),
           ),
-          TextButton(
-            onPressed: _loadMasterData,
-            child: const Text('Ulangi'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildAppBar() {
-    return Container(
-      height: 56,
-      padding: const EdgeInsets.symmetric(horizontal: 14),
-      decoration: const BoxDecoration(
-        color: Color(0xFFB91C1C),
-        boxShadow: [
-          BoxShadow(
-            color: Color(0x22000000),
-            blurRadius: 8,
-            offset: Offset(0, 3),
-          ),
-        ],
-      ),
-      child: Row(
-        children: [
-          InkWell(
-            onTap: () => Navigator.pop(context),
-            borderRadius: BorderRadius.circular(999),
-            child: const Padding(
-              padding: EdgeInsets.all(5),
-              child: Icon(
-                Icons.arrow_back_ios_new_rounded,
-                color: Colors.white,
-                size: 18,
-              ),
-            ),
-          ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Text(
-              widget.isEdit ? 'Edit Barang Keluar' : 'Tambah Barang Keluar',
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
-                color: Colors.white,
-                fontSize: 18,
-                fontWeight: FontWeight.w800,
-              ),
-            ),
-          ),
-          IconButton(
-            onPressed: _loadMasterData,
-            icon: const Icon(
-              Icons.refresh_rounded,
-              color: Colors.white,
-              size: 21,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildInfoBanner() {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        gradient: const LinearGradient(
-          colors: [
-            Color(0xFFEF4444),
-            Color(0xFFB91C1C),
-          ],
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-        ),
-        borderRadius: BorderRadius.circular(20),
-        boxShadow: const [
-          BoxShadow(
-            color: Color(0x1FEF4444),
-            blurRadius: 12,
-            offset: Offset(0, 5),
-          ),
-        ],
-      ),
-      child: Row(
-        children: [
-          Container(
-            width: 42,
-            height: 42,
-            decoration: BoxDecoration(
-              color: Colors.white.withOpacity(0.18),
-              borderRadius: BorderRadius.circular(14),
-              border: Border.all(
-                color: Colors.white.withOpacity(0.22),
-              ),
-            ),
-            child: const Icon(
-              Icons.outbox_rounded,
-              color: Colors.white,
-              size: 23,
-            ),
-          ),
-          const SizedBox(width: 12),
-          const Expanded(
+          SafeArea(
             child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  'Form Pengeluaran Barang',
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 14.5,
-                    fontWeight: FontWeight.w900,
-                  ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+                  child: _buildHeader(),
                 ),
-                SizedBox(height: 3),
-                Text(
-                  'Pilih barang dari stok, isi qty keluar, lalu kirim untuk approval admin.',
-                  style: TextStyle(
-                    color: Color(0xFFFFF1F2),
-                    fontSize: 11.5,
-                    height: 1.25,
-                    fontWeight: FontWeight.w500,
+                Expanded(
+                  child: RefreshIndicator(
+                    color: _primaryRed,
+                    backgroundColor: Colors.white,
+                    onRefresh: _loadMasterData,
+                    child: SingleChildScrollView(
+                      physics: const AlwaysScrollableScrollPhysics(
+                        parent: BouncingScrollPhysics(),
+                      ),
+                      padding: const EdgeInsets.fromLTRB(16, 14, 16, 22),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          _buildInfoBanner(),
+                          if (isLoadingMaster) ...[
+                            const SizedBox(height: 10),
+                            ClipRRect(
+                              borderRadius: BorderRadius.circular(999),
+                              child: const LinearProgressIndicator(
+                                minHeight: 4,
+                                backgroundColor: Color(0xFFE5E7EB),
+                                color: _primaryRed,
+                              ),
+                            ),
+                          ],
+                          if (errorMessage != null) ...[
+                            const SizedBox(height: 10),
+                            _buildErrorBanner(),
+                          ],
+                          const SizedBox(height: 14),
+                          _buildDocumentSection(),
+                          const SizedBox(height: 14),
+                          _buildDetailBarangSection(stock),
+                          const SizedBox(height: 14),
+                          _buildSelectedItemsSection(),
+                          const SizedBox(height: 14),
+                          _buildAttachmentSection(),
+                          const SizedBox(height: 12),
+                        ],
+                      ),
+                    ),
                   ),
                 ),
               ],
@@ -1071,47 +1472,212 @@ class _TambahBarangKeluarScreenState extends State<TambahBarangKeluarScreen> {
     );
   }
 
+  Widget _buildHeader() {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(24),
+        gradient: const LinearGradient(
+          colors: [
+            Color(0xFFFF5757),
+            Color(0xFFEF4444),
+            Color(0xFFDC2626),
+          ],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: _primaryRed.withValues(alpha: 0.18),
+            blurRadius: 18,
+            offset: const Offset(0, 8),
+          ),
+        ],
+      ),
+      child: Row(
+        children: [
+          _HeaderIconButton(
+            icon: Icons.arrow_back_ios_new_rounded,
+            onTap: () => Navigator.pop(context),
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  widget.isEdit ? 'Edit Barang Keluar' : 'Tambah Barang Keluar',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 22,
+                    fontWeight: FontWeight.w900,
+                    letterSpacing: -0.3,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  widget.isEdit
+                      ? 'Perbarui data pengeluaran'
+                      : 'Input pengeluaran barang',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Color(0xFFFFF1F2),
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 14),
+          _HeaderIconButton(
+            icon: Icons.refresh_rounded,
+            onTap: _loadMasterData,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildInfoBanner() {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(13),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFECEC),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(
+          color: const Color(0xFFFECACA),
+        ),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 38,
+            height: 38,
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.82),
+              borderRadius: BorderRadius.circular(13),
+              border: Border.all(
+                color: const Color(0xFFFCA5A5),
+              ),
+            ),
+            child: const Icon(
+              Icons.outbox_rounded,
+              color: _primaryRed,
+              size: 21,
+            ),
+          ),
+          const SizedBox(width: 11),
+          Expanded(
+            child: Text(
+              widget.isEdit
+                  ? 'Data lama otomatis dimuat. Ubah bagian yang diperlukan lalu simpan kembali.'
+                  : 'Data barang keluar akan dikirim sebagai pengajuan dan menunggu approval admin.',
+              style: const TextStyle(
+                color: Color(0xFF991B1B),
+                fontSize: 12,
+                height: 1.3,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildErrorBanner() {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFE4E6),
+        borderRadius: BorderRadius.circular(15),
+        border: Border.all(
+          color: const Color(0xFFFCA5A5),
+        ),
+      ),
+      child: Row(
+        children: [
+          const Icon(
+            Icons.warning_amber_rounded,
+            color: _primaryRed,
+            size: 20,
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              errorMessage ?? 'Terjadi kesalahan.',
+              style: const TextStyle(
+                fontSize: 11.5,
+                color: Color(0xFF991B1B),
+                fontWeight: FontWeight.w700,
+                height: 1.25,
+              ),
+            ),
+          ),
+          TextButton(
+            onPressed: _loadMasterData,
+            child: const Text(
+              'Ulangi',
+              style: TextStyle(
+                color: _primaryRed,
+                fontWeight: FontWeight.w900,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildDocumentSection() {
     return _sectionCard(
       title: 'Data Dokumen',
-      subtitle: 'Informasi dasar barang keluar',
+      subtitle: 'Tanggal, jenis keluar, dan tujuan',
       icon: Icons.description_outlined,
-      iconColor: const Color(0xFFEF4444),
-      iconBgColor: const Color(0xFFFFECEC),
+      iconColor: _primaryBlue,
+      iconBgColor: const Color(0xFFEFF6FF),
       child: Column(
         children: [
-          Row(
-            children: [
-              Expanded(
-                child: _inputField(
-                  label: 'Tanggal Keluar',
-                  controller: tanggalController,
-                  readOnly: true,
-                  onTap: _pickTanggal,
-                  suffixIcon: Icons.calendar_today_outlined,
-                ),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: _inputField(
-                  label: 'Jenis Keluar',
-                  controller: jenisKeluarController,
-                ),
-              ),
-            ],
+          _inputField(
+            label: 'Tanggal Keluar',
+            controller: tanggalController,
+            readOnly: true,
+            onTap: _pickTanggal,
+            suffixIcon: Icons.calendar_today_outlined,
           ),
           const SizedBox(height: 12),
-          _pickerInputField(
+          _inputField(
+            label: 'Jenis Keluar',
+            controller: jenisKeluarController,
+            hintText: 'Contoh: Penjualan',
+          ),
+          const SizedBox(height: 12),
+          _inputField(
             label: 'Customer / Tujuan',
             controller: tujuanController,
-            hintText: 'Pilih customer / tujuan',
-            onTap: _showCustomerPicker,
+            hintText: 'Masukkan customer / tujuan',
+            suffixIcon: Icons.edit_outlined,
+            onChanged: (_) {
+              setState(() {
+                selectedCustomerId = null;
+              });
+            },
           ),
           const SizedBox(height: 12),
           _inputField(
             label: 'No. Keluar / Referensi',
-            hintText: 'Opsional',
+            hintText: 'Otomatis',
             controller: invoiceController,
+            readOnly: true,
+            enableInteractiveSelection: false,
+            suffixIcon: Icons.lock_outline_rounded,
           ),
         ],
       ),
@@ -1123,7 +1689,7 @@ class _TambahBarangKeluarScreenState extends State<TambahBarangKeluarScreen> {
       title: 'Detail Barang',
       subtitle: 'Pilih barang dan tentukan qty keluar',
       icon: Icons.inventory_2_outlined,
-      iconColor: const Color(0xFFEF4444),
+      iconColor: _primaryRed,
       iconBgColor: const Color(0xFFFFECEC),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1132,8 +1698,38 @@ class _TambahBarangKeluarScreenState extends State<TambahBarangKeluarScreen> {
           const SizedBox(height: 10),
           _quickAdditionalItems(),
           const SizedBox(height: 12),
-          if (stock != null) _selectedBarangPreview(stock),
-          if (stock != null) const SizedBox(height: 12),
+          if (stock != null) ...[
+            OutboundStockInfoCard(
+              stock: stock,
+              productName: _stockProductName(stock),
+              productCode: _stockProductCode(stock),
+              unit: _stockUnit(stock),
+              warehouseName: _stockWarehouseName(stock),
+              sizeText: _stockSize(stock),
+              typeName: _stockType(stock),
+              densityName: _stockDensity(stock),
+              categoryName: _stockCategory(stock),
+              availableQty: _availableQty(stock),
+              availableAfterSelected: stokTersediaSetelahDipilih,
+              sisaStok: sisaStok,
+              barangHabis: barangHabis,
+              qtyKosongAtauNol: qtyKosongAtauNol,
+              stokTidakCukup: stokTidakCukup,
+              formatQty: _formatQty,
+              logoBuilder: (
+                Map<String, dynamic> item, {
+                double size = 40,
+                bool selected = false,
+              }) {
+                return _buildProductLogo(
+                  item,
+                  size: size,
+                  selected: selected,
+                );
+              },
+            ),
+            const SizedBox(height: 12),
+          ],
           Row(
             children: [
               Expanded(
@@ -1153,8 +1749,6 @@ class _TambahBarangKeluarScreenState extends State<TambahBarangKeluarScreen> {
               ),
             ],
           ),
-          const SizedBox(height: 10),
-          _stockResultBox(stock),
           const SizedBox(height: 12),
           SizedBox(
             width: double.infinity,
@@ -1170,12 +1764,12 @@ class _TambahBarangKeluarScreenState extends State<TambahBarangKeluarScreen> {
                 ),
               ),
               style: OutlinedButton.styleFrom(
-                foregroundColor: const Color(0xFFEF4444),
+                foregroundColor: _primaryRed,
                 disabledForegroundColor: const Color(0xFFFCA5A5),
                 side: BorderSide(
                   color: itemTidakValid
                       ? const Color(0xFFFCA5A5)
-                      : const Color(0xFFEF4444),
+                      : _primaryRed,
                 ),
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(14),
@@ -1206,24 +1800,29 @@ class _TambahBarangKeluarScreenState extends State<TambahBarangKeluarScreen> {
           color: const Color(0xFFF8FAFC),
           borderRadius: BorderRadius.circular(16),
           border: Border.all(
-            color: const Color(0xFFE5E7EB),
+            color: _borderColor,
           ),
         ),
         child: Row(
           children: [
-            Container(
-              width: 38,
-              height: 38,
-              decoration: BoxDecoration(
-                color: const Color(0xFFFFECEC),
-                borderRadius: BorderRadius.circular(13),
-              ),
-              child: const Icon(
-                Icons.search_rounded,
-                color: Color(0xFFEF4444),
-                size: 21,
-              ),
-            ),
+            stock == null
+                ? Container(
+                    width: 40,
+                    height: 40,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFFFECEC),
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(
+                        color: const Color(0xFFFECACA),
+                      ),
+                    ),
+                    child: const Icon(
+                      Icons.inventory_2_outlined,
+                      color: _primaryRed,
+                      size: 21,
+                    ),
+                  )
+                : _buildProductLogo(stock, size: 40),
             const SizedBox(width: 10),
             Expanded(
               child: stock == null
@@ -1234,7 +1833,7 @@ class _TambahBarangKeluarScreenState extends State<TambahBarangKeluarScreen> {
                           'Pilih Barang',
                           style: TextStyle(
                             fontSize: 11,
-                            color: Color(0xFF6B7280),
+                            color: _softText,
                             fontWeight: FontWeight.w700,
                           ),
                         ),
@@ -1245,7 +1844,7 @@ class _TambahBarangKeluarScreenState extends State<TambahBarangKeluarScreen> {
                           overflow: TextOverflow.ellipsis,
                           style: TextStyle(
                             fontSize: 13,
-                            color: Color(0xFF111827),
+                            color: _darkText,
                             fontWeight: FontWeight.w900,
                           ),
                         ),
@@ -1258,7 +1857,7 @@ class _TambahBarangKeluarScreenState extends State<TambahBarangKeluarScreen> {
                           'Pilih Barang',
                           style: TextStyle(
                             fontSize: 11,
-                            color: Color(0xFF6B7280),
+                            color: _softText,
                             fontWeight: FontWeight.w700,
                           ),
                         ),
@@ -1269,7 +1868,7 @@ class _TambahBarangKeluarScreenState extends State<TambahBarangKeluarScreen> {
                           overflow: TextOverflow.ellipsis,
                           style: const TextStyle(
                             fontSize: 13,
-                            color: Color(0xFF111827),
+                            color: _darkText,
                             fontWeight: FontWeight.w900,
                           ),
                         ),
@@ -1280,7 +1879,7 @@ class _TambahBarangKeluarScreenState extends State<TambahBarangKeluarScreen> {
                           overflow: TextOverflow.ellipsis,
                           style: const TextStyle(
                             fontSize: 11,
-                            color: Color(0xFF6B7280),
+                            color: _softText,
                             fontWeight: FontWeight.w600,
                           ),
                         ),
@@ -1290,501 +1889,8 @@ class _TambahBarangKeluarScreenState extends State<TambahBarangKeluarScreen> {
             const SizedBox(width: 8),
             const Icon(
               Icons.keyboard_arrow_down_rounded,
-              color: Color(0xFF6B7280),
+              color: _softText,
               size: 24,
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  void _showCustomerPicker() {
-    customerSearchController.clear();
-
-    _showGenericPicker(
-      title: 'Pilih Customer / Tujuan',
-      searchController: customerSearchController,
-      items: customers,
-      selectedId: selectedCustomerId,
-      emptyText: 'Customer tidak ditemukan',
-      displayTitle: (item) => _customerName(item),
-      displaySubtitle: (item) {
-        final phone = _cleanText(item['phone']);
-        final email = _cleanText(item['email']);
-
-        if (phone.isNotEmpty && email.isNotEmpty) return '$phone • $email';
-        if (phone.isNotEmpty) return phone;
-        if (email.isNotEmpty) return email;
-
-        return 'Customer';
-      },
-      onSelected: (item) => _selectCustomer(item),
-    );
-  }
-
-  void _showBarangPicker() {
-    barangSearchController.clear();
-
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (context) {
-        List<Map<String, dynamic>> filtered = List.from(stocks);
-
-        return StatefulBuilder(
-          builder: (context, setModalState) {
-            void runSearch(String value) {
-              final query = value.trim().toLowerCase();
-
-              setModalState(() {
-                filtered = stocks.where((item) {
-                  final code = _stockProductCode(item).toLowerCase();
-                  final name = _stockProductName(item).toLowerCase();
-                  final gudang = _stockWarehouseName(item).toLowerCase();
-
-                  return code.contains(query) ||
-                      name.contains(query) ||
-                      gudang.contains(query);
-                }).toList();
-              });
-            }
-
-            return Padding(
-              padding: EdgeInsets.only(
-                bottom: MediaQuery.of(context).viewInsets.bottom,
-              ),
-              child: Container(
-                constraints: BoxConstraints(
-                  maxHeight: MediaQuery.of(context).size.height * 0.82,
-                ),
-                padding: const EdgeInsets.fromLTRB(16, 12, 16, 18),
-                decoration: const BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.vertical(
-                    top: Radius.circular(24),
-                  ),
-                ),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Container(
-                      width: 42,
-                      height: 4,
-                      decoration: BoxDecoration(
-                        color: const Color(0xFFE5E7EB),
-                        borderRadius: BorderRadius.circular(999),
-                      ),
-                    ),
-                    const SizedBox(height: 16),
-                    const Align(
-                      alignment: Alignment.centerLeft,
-                      child: Text(
-                        'Pilih Barang Stok',
-                        style: TextStyle(
-                          fontSize: 16,
-                          color: Color(0xFF111827),
-                          fontWeight: FontWeight.w900,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    Container(
-                      height: 46,
-                      padding: const EdgeInsets.symmetric(horizontal: 12),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFFF8FAFC),
-                        borderRadius: BorderRadius.circular(15),
-                        border: Border.all(
-                          color: const Color(0xFFE5E7EB),
-                        ),
-                      ),
-                      child: Row(
-                        children: [
-                          const Icon(
-                            Icons.search_rounded,
-                            size: 20,
-                            color: Color(0xFF6B7280),
-                          ),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: TextField(
-                              controller: barangSearchController,
-                              onChanged: runSearch,
-                              decoration: const InputDecoration(
-                                hintText: 'Cari nama, kode, atau gudang',
-                                border: InputBorder.none,
-                                isCollapsed: true,
-                                hintStyle: TextStyle(
-                                  fontSize: 12.5,
-                                  color: Color(0xFF9CA3AF),
-                                ),
-                              ),
-                              style: const TextStyle(
-                                fontSize: 13,
-                                color: Color(0xFF111827),
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    Flexible(
-                      child: filtered.isEmpty
-                          ? const Center(
-                              child: Padding(
-                                padding: EdgeInsets.symmetric(vertical: 24),
-                                child: Text(
-                                  'Barang tidak ditemukan',
-                                  style: TextStyle(
-                                    fontSize: 12.5,
-                                    color: Color(0xFF6B7280),
-                                    fontWeight: FontWeight.w700,
-                                  ),
-                                ),
-                              ),
-                            )
-                          : ListView.separated(
-                              shrinkWrap: true,
-                              physics: const BouncingScrollPhysics(),
-                              itemCount: filtered.length,
-                              separatorBuilder: (_, __) =>
-                                  const SizedBox(height: 8),
-                              itemBuilder: (context, index) {
-                                final item = filtered[index];
-                                final bool isSelected =
-                                    selectedStockKey == _stockKey(item);
-
-                                return _barangOption(
-                                  item: item,
-                                  isSelected: isSelected,
-                                  onTap: () {
-                                    _selectStock(item);
-                                    Navigator.pop(context);
-                                  },
-                                );
-                              },
-                            ),
-                    ),
-                  ],
-                ),
-              ),
-            );
-          },
-        );
-      },
-    );
-  }
-
-  void _showGenericPicker({
-    required String title,
-    required TextEditingController searchController,
-    required List<Map<String, dynamic>> items,
-    required int? selectedId,
-    required String emptyText,
-    required String Function(Map<String, dynamic>) displayTitle,
-    required String Function(Map<String, dynamic>) displaySubtitle,
-    required void Function(Map<String, dynamic>) onSelected,
-  }) {
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (context) {
-        List<Map<String, dynamic>> filtered = List.from(items);
-
-        return StatefulBuilder(
-          builder: (context, setModalState) {
-            void runSearch(String value) {
-              final query = value.trim().toLowerCase();
-
-              setModalState(() {
-                filtered = items.where((item) {
-                  return displayTitle(item).toLowerCase().contains(query) ||
-                      displaySubtitle(item).toLowerCase().contains(query);
-                }).toList();
-              });
-            }
-
-            return Padding(
-              padding: EdgeInsets.only(
-                bottom: MediaQuery.of(context).viewInsets.bottom,
-              ),
-              child: Container(
-                constraints: BoxConstraints(
-                  maxHeight: MediaQuery.of(context).size.height * 0.82,
-                ),
-                padding: const EdgeInsets.fromLTRB(16, 12, 16, 18),
-                decoration: const BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.vertical(
-                    top: Radius.circular(24),
-                  ),
-                ),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Container(
-                      width: 42,
-                      height: 4,
-                      decoration: BoxDecoration(
-                        color: const Color(0xFFE5E7EB),
-                        borderRadius: BorderRadius.circular(999),
-                      ),
-                    ),
-                    const SizedBox(height: 16),
-                    Align(
-                      alignment: Alignment.centerLeft,
-                      child: Text(
-                        title,
-                        style: const TextStyle(
-                          fontSize: 16,
-                          color: Color(0xFF111827),
-                          fontWeight: FontWeight.w900,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    Container(
-                      height: 46,
-                      padding: const EdgeInsets.symmetric(horizontal: 12),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFFF8FAFC),
-                        borderRadius: BorderRadius.circular(15),
-                        border: Border.all(
-                          color: const Color(0xFFE5E7EB),
-                        ),
-                      ),
-                      child: Row(
-                        children: [
-                          const Icon(
-                            Icons.search_rounded,
-                            size: 20,
-                            color: Color(0xFF6B7280),
-                          ),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: TextField(
-                              controller: searchController,
-                              onChanged: runSearch,
-                              decoration: const InputDecoration(
-                                hintText: 'Cari data...',
-                                border: InputBorder.none,
-                                isCollapsed: true,
-                                hintStyle: TextStyle(
-                                  fontSize: 12.5,
-                                  color: Color(0xFF9CA3AF),
-                                ),
-                              ),
-                              style: const TextStyle(
-                                fontSize: 13,
-                                color: Color(0xFF111827),
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    Flexible(
-                      child: filtered.isEmpty
-                          ? Center(
-                              child: Padding(
-                                padding:
-                                    const EdgeInsets.symmetric(vertical: 24),
-                                child: Text(
-                                  emptyText,
-                                  style: const TextStyle(
-                                    fontSize: 12.5,
-                                    color: Color(0xFF6B7280),
-                                    fontWeight: FontWeight.w700,
-                                  ),
-                                ),
-                              ),
-                            )
-                          : ListView.separated(
-                              shrinkWrap: true,
-                              physics: const BouncingScrollPhysics(),
-                              itemCount: filtered.length,
-                              separatorBuilder: (_, __) =>
-                                  const SizedBox(height: 8),
-                              itemBuilder: (context, index) {
-                                final item = filtered[index];
-                                final isSelected =
-                                    selectedId == _toInt(item['id']);
-
-                                return InkWell(
-                                  onTap: () {
-                                    onSelected(item);
-                                    Navigator.pop(context);
-                                  },
-                                  borderRadius: BorderRadius.circular(16),
-                                  child: Container(
-                                    padding: const EdgeInsets.all(12),
-                                    decoration: BoxDecoration(
-                                      color: isSelected
-                                          ? const Color(0xFFFFECEC)
-                                          : const Color(0xFFF8FAFC),
-                                      borderRadius: BorderRadius.circular(16),
-                                      border: Border.all(
-                                        color: isSelected
-                                            ? const Color(0xFFFCA5A5)
-                                            : const Color(0xFFE5E7EB),
-                                      ),
-                                    ),
-                                    child: Row(
-                                      children: [
-                                        Container(
-                                          width: 38,
-                                          height: 38,
-                                          decoration: BoxDecoration(
-                                            color: isSelected
-                                                ? const Color(0xFFEF4444)
-                                                : const Color(0xFFFFECEC),
-                                            borderRadius:
-                                                BorderRadius.circular(13),
-                                          ),
-                                          child: Icon(
-                                            isSelected
-                                                ? Icons.check_rounded
-                                                : Icons.person_outline_rounded,
-                                            color: isSelected
-                                                ? Colors.white
-                                                : const Color(0xFFEF4444),
-                                            size: 20,
-                                          ),
-                                        ),
-                                        const SizedBox(width: 10),
-                                        Expanded(
-                                          child: Column(
-                                            crossAxisAlignment:
-                                                CrossAxisAlignment.start,
-                                            children: [
-                                              Text(
-                                                displayTitle(item),
-                                                maxLines: 2,
-                                                overflow: TextOverflow.ellipsis,
-                                                style: const TextStyle(
-                                                  fontSize: 12.5,
-                                                  color: Color(0xFF111827),
-                                                  fontWeight: FontWeight.w900,
-                                                  height: 1.2,
-                                                ),
-                                              ),
-                                              const SizedBox(height: 4),
-                                              Text(
-                                                displaySubtitle(item),
-                                                maxLines: 1,
-                                                overflow: TextOverflow.ellipsis,
-                                                style: const TextStyle(
-                                                  fontSize: 11,
-                                                  color: Color(0xFF6B7280),
-                                                  fontWeight: FontWeight.w600,
-                                                ),
-                                              ),
-                                            ],
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                );
-                              },
-                            ),
-                    ),
-                  ],
-                ),
-              ),
-            );
-          },
-        );
-      },
-    );
-  }
-
-  Widget _barangOption({
-    required Map<String, dynamic> item,
-    required bool isSelected,
-    required VoidCallback onTap,
-  }) {
-    final bool isEmpty = _availableQty(item) <= 0;
-
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(16),
-      child: Container(
-        padding: const EdgeInsets.all(12),
-        decoration: BoxDecoration(
-          color: isSelected ? const Color(0xFFFFECEC) : const Color(0xFFF8FAFC),
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(
-            color: isSelected
-                ? const Color(0xFFFCA5A5)
-                : const Color(0xFFE5E7EB),
-          ),
-        ),
-        child: Row(
-          children: [
-            Container(
-              width: 38,
-              height: 38,
-              decoration: BoxDecoration(
-                color:
-                    isSelected ? const Color(0xFFEF4444) : const Color(0xFFFFECEC),
-                borderRadius: BorderRadius.circular(13),
-              ),
-              child: Icon(
-                isSelected ? Icons.check_rounded : Icons.inventory_2_outlined,
-                color: isSelected ? Colors.white : const Color(0xFFEF4444),
-                size: 20,
-              ),
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    _stockProductName(item),
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      fontSize: 12.5,
-                      color: Color(0xFF111827),
-                      fontWeight: FontWeight.w900,
-                      height: 1.2,
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    '${_stockProductCode(item)} • ${_stockWarehouseName(item)} • ${_stockSize(item)}',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      fontSize: 11,
-                      color: Color(0xFF6B7280),
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(width: 8),
-            Text(
-              isEmpty
-                  ? 'Habis'
-                  : '${_formatQty(_availableQty(item))} ${_stockUnit(item)}',
-              style: TextStyle(
-                fontSize: 11,
-                color: isEmpty
-                    ? const Color(0xFFEF4444)
-                    : const Color(0xFF16A34A),
-                fontWeight: FontWeight.w900,
-              ),
             ),
           ],
         ),
@@ -1823,7 +1929,7 @@ class _TambahBarangKeluarScreenState extends State<TambahBarangKeluarScreen> {
         height: 38,
         alignment: Alignment.center,
         decoration: BoxDecoration(
-          color: const Color(0xFFFFF1F2),
+          color: const Color(0xFFFFECEC),
           borderRadius: BorderRadius.circular(999),
           border: Border.all(color: const Color(0xFFFCA5A5)),
         ),
@@ -1831,168 +1937,10 @@ class _TambahBarangKeluarScreenState extends State<TambahBarangKeluarScreen> {
           label,
           style: const TextStyle(
             fontSize: 12,
-            color: Color(0xFFEF4444),
+            color: _primaryRed,
             fontWeight: FontWeight.w900,
           ),
         ),
-      ),
-    );
-  }
-
-  Widget _selectedBarangPreview(Map<String, dynamic> stock) {
-    final bool isEmpty = stokTersediaSetelahDipilih <= 0;
-
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: isEmpty ? const Color(0xFFFFECEC) : const Color(0xFFFFF7F7),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(
-          color: isEmpty ? const Color(0xFFFCA5A5) : const Color(0xFFFECACA),
-        ),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            _stockProductName(stock),
-            maxLines: 2,
-            overflow: TextOverflow.ellipsis,
-            style: const TextStyle(
-              fontSize: 13,
-              color: Color(0xFF111827),
-              fontWeight: FontWeight.w900,
-              height: 1.2,
-            ),
-          ),
-          const SizedBox(height: 10),
-          Wrap(
-            spacing: 7,
-            runSpacing: 7,
-            children: [
-              _itemInfoChip(Icons.qr_code_2_rounded, _stockProductCode(stock)),
-              _itemInfoChip(
-                Icons.inventory_2_outlined,
-                '${_formatQty(_availableQty(stock))} ${_stockUnit(stock)}',
-              ),
-              _itemInfoChip(
-                Icons.location_on_outlined,
-                _stockWarehouseName(stock),
-              ),
-              _itemInfoChip(Icons.straighten_rounded, _stockSize(stock)),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _itemInfoChip(IconData icon, dynamic value) {
-    return Container(
-      padding: const EdgeInsets.symmetric(
-        horizontal: 9,
-        vertical: 6,
-      ),
-      decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.78),
-        borderRadius: BorderRadius.circular(999),
-        border: Border.all(
-          color: const Color(0xFFFECACA),
-        ),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(
-            icon,
-            size: 13,
-            color: const Color(0xFFEF4444),
-          ),
-          const SizedBox(width: 5),
-          Text(
-            value.toString(),
-            style: const TextStyle(
-              fontSize: 10.8,
-              color: Color(0xFF111827),
-              fontWeight: FontWeight.w800,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _stockResultBox(Map<String, dynamic>? stock) {
-    Color color;
-    Color bgColor;
-    Color borderColor;
-    IconData icon;
-    String text;
-
-    if (stock == null) {
-      color = const Color(0xFFF59E0B);
-      bgColor = const Color(0xFFFFF7ED);
-      borderColor = const Color(0xFFFED7AA);
-      icon = Icons.warning_amber_rounded;
-      text = 'Pilih barang';
-    } else if (barangHabis) {
-      color = const Color(0xFFEF4444);
-      bgColor = const Color(0xFFFFECEC);
-      borderColor = const Color(0xFFFCA5A5);
-      icon = Icons.cancel_outlined;
-      text = 'Stok barang habis';
-    } else if (qtyKosongAtauNol) {
-      color = const Color(0xFFF59E0B);
-      bgColor = const Color(0xFFFFF7ED);
-      borderColor = const Color(0xFFFED7AA);
-      icon = Icons.warning_amber_rounded;
-      text = 'Qty harus lebih dari 0';
-    } else if (stokTidakCukup) {
-      color = const Color(0xFFEF4444);
-      bgColor = const Color(0xFFFFECEC);
-      borderColor = const Color(0xFFFCA5A5);
-      icon = Icons.warning_amber_rounded;
-      text = 'Stok tidak cukup';
-    } else {
-      color = const Color(0xFF16A34A);
-      bgColor = const Color(0xFFEFFDF5);
-      borderColor = const Color(0xFFBBF7D0);
-      icon = Icons.check_circle_outline_rounded;
-      text = '${_formatQty(sisaStok)} ${_stockUnit(stock)}';
-    }
-
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
-      decoration: BoxDecoration(
-        color: bgColor,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: borderColor),
-      ),
-      child: Row(
-        children: [
-          Icon(icon, size: 18, color: color),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Text(
-              'Sisa stok setelah keluar',
-              style: TextStyle(
-                fontSize: 12,
-                color: color,
-                fontWeight: FontWeight.w700,
-              ),
-            ),
-          ),
-          Text(
-            text,
-            style: TextStyle(
-              fontSize: 12,
-              color: color,
-              fontWeight: FontWeight.w900,
-            ),
-          ),
-        ],
       ),
     );
   }
@@ -2015,14 +1963,16 @@ class _TambahBarangKeluarScreenState extends State<TambahBarangKeluarScreen> {
             color: const Color(0xFFF8FAFC),
             borderRadius: BorderRadius.circular(14),
             border: Border.all(
-              color: const Color(0xFFE5E7EB),
+              color: _borderColor,
             ),
           ),
           child: Text(
             value,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
             style: const TextStyle(
               fontSize: 12.5,
-              color: Color(0xFF111827),
+              color: _darkText,
               fontWeight: FontWeight.w800,
             ),
           ),
@@ -2036,9 +1986,9 @@ class _TambahBarangKeluarScreenState extends State<TambahBarangKeluarScreen> {
       title: 'Daftar Barang Keluar',
       subtitle: selectedItems.isEmpty
           ? 'Belum ada barang ditambahkan'
-          : '${selectedItems.length} item • ${_formatQty(totalQtyBarangKeluar)} PCS',
+          : '${selectedItems.length} item • ${_formatQty(totalQtyBarangKeluar)} qty',
       icon: Icons.list_alt_outlined,
-      iconColor: const Color(0xFFEF4444),
+      iconColor: _primaryRed,
       iconBgColor: const Color(0xFFFFECEC),
       child: selectedItems.isEmpty
           ? const Padding(
@@ -2065,7 +2015,7 @@ class _TambahBarangKeluarScreenState extends State<TambahBarangKeluarScreen> {
                     textAlign: TextAlign.center,
                     style: TextStyle(
                       fontSize: 11.5,
-                      color: Color(0xFF6B7280),
+                      color: _softText,
                       fontWeight: FontWeight.w500,
                     ),
                   ),
@@ -2082,7 +2032,25 @@ class _TambahBarangKeluarScreenState extends State<TambahBarangKeluarScreen> {
                     padding: EdgeInsets.only(
                       bottom: index == selectedItems.length - 1 ? 0 : 8,
                     ),
-                    child: _selectedItemRow(index, item),
+                    child: OutboundItemCard(
+                      index: index,
+                      item: item,
+                      formatQty: _formatQty,
+                      productLogoBuilder: (
+                        Map<String, dynamic> item, {
+                        double size = 40,
+                        bool selected = false,
+                      }) {
+                        return _buildProductLogo(
+                          item,
+                          size: size,
+                          selected: selected,
+                        );
+                      },
+                      onIncrease: () => _increaseItemQty(index),
+                      onDecrease: () => _decreaseItemQty(index),
+                      onRemove: () => _removeItemFromList(index),
+                    ),
                   );
                 }),
                 const SizedBox(height: 12),
@@ -2104,7 +2072,7 @@ class _TambahBarangKeluarScreenState extends State<TambahBarangKeluarScreen> {
                       const Icon(
                         Icons.summarize_outlined,
                         size: 18,
-                        color: Color(0xFFEF4444),
+                        color: _primaryRed,
                       ),
                       const SizedBox(width: 8),
                       const Expanded(
@@ -2112,16 +2080,16 @@ class _TambahBarangKeluarScreenState extends State<TambahBarangKeluarScreen> {
                           'Total Qty Keluar',
                           style: TextStyle(
                             fontSize: 12,
-                            color: Color(0xFFEF4444),
+                            color: _primaryRed,
                             fontWeight: FontWeight.w800,
                           ),
                         ),
                       ),
                       Text(
-                        '${_formatQty(totalQtyBarangKeluar)} PCS',
+                        _formatQty(totalQtyBarangKeluar),
                         style: const TextStyle(
                           fontSize: 12.5,
-                          color: Color(0xFFEF4444),
+                          color: _primaryRed,
                           fontWeight: FontWeight.w900,
                         ),
                       ),
@@ -2133,139 +2101,10 @@ class _TambahBarangKeluarScreenState extends State<TambahBarangKeluarScreen> {
     );
   }
 
-  Widget _selectedItemRow(int index, Map<String, dynamic> item) {
-    return Container(
-      padding: const EdgeInsets.all(11),
-      decoration: BoxDecoration(
-        color: const Color(0xFFF8FAFC),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(
-          color: const Color(0xFFE5E7EB),
-        ),
-      ),
-      child: Row(
-        children: [
-          Container(
-            width: 32,
-            height: 32,
-            alignment: Alignment.center,
-            decoration: BoxDecoration(
-              color: const Color(0xFFFFECEC),
-              borderRadius: BorderRadius.circular(11),
-            ),
-            child: Text(
-              '${index + 1}',
-              style: const TextStyle(
-                color: Color(0xFFEF4444),
-                fontSize: 12,
-                fontWeight: FontWeight.w900,
-              ),
-            ),
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  item['name'].toString(),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    fontSize: 12.5,
-                    color: Color(0xFF111827),
-                    fontWeight: FontWeight.w900,
-                  ),
-                ),
-                const SizedBox(height: 3),
-                Text(
-                  '${item['code']} • ${item['gudang']}',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    fontSize: 10.5,
-                    color: Color(0xFF6B7280),
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(width: 8),
-          Row(
-            children: [
-              _qtyButton(
-                icon: Icons.remove_rounded,
-                onTap: () => _decreaseItemQty(index),
-              ),
-              const SizedBox(width: 6),
-              Text(
-                _formatQty(_toDouble(item['qty'])),
-                style: const TextStyle(
-                  fontSize: 12.5,
-                  color: Color(0xFFEF4444),
-                  fontWeight: FontWeight.w900,
-                ),
-              ),
-              const SizedBox(width: 4),
-              Text(
-                item['satuan'].toString(),
-                style: const TextStyle(
-                  fontSize: 10.5,
-                  color: Color(0xFFEF4444),
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-              const SizedBox(width: 6),
-              _qtyButton(
-                icon: Icons.add_rounded,
-                onTap: () => _increaseItemQty(index),
-              ),
-            ],
-          ),
-          const SizedBox(width: 7),
-          InkWell(
-            onTap: () => _removeItemFromList(index),
-            borderRadius: BorderRadius.circular(999),
-            child: const Icon(
-              Icons.delete_outline_rounded,
-              color: Color(0xFFEF4444),
-              size: 21,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _qtyButton({
-    required IconData icon,
-    required VoidCallback onTap,
-  }) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(8),
-      child: Container(
-        width: 24,
-        height: 24,
-        alignment: Alignment.center,
-        decoration: BoxDecoration(
-          color: const Color(0xFFFFECEC),
-          borderRadius: BorderRadius.circular(8),
-        ),
-        child: Icon(
-          icon,
-          size: 15,
-          color: const Color(0xFFEF4444),
-        ),
-      ),
-    );
-  }
-
   Widget _buildAttachmentSection() {
     return _sectionCard(
       title: 'Lampiran Bukti',
-      subtitle: 'Upload foto bukti barang keluar maksimal 3 foto',
+      subtitle: 'Upload foto maksimal 3 foto',
       icon: Icons.attach_file_rounded,
       iconColor: const Color(0xFF7C3AED),
       iconBgColor: const Color(0xFFF3E8FF),
@@ -2302,36 +2141,39 @@ class _TambahBarangKeluarScreenState extends State<TambahBarangKeluarScreen> {
     required String label,
     required VoidCallback onTap,
   }) {
-    return InkWell(
-      onTap: isSubmitting ? null : onTap,
+    return Material(
+      color: const Color(0xFFFFECEC),
       borderRadius: BorderRadius.circular(14),
-      child: Container(
-        height: 44,
-        decoration: BoxDecoration(
-          color: const Color(0xFFFFECEC),
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(
-            color: const Color(0xFFFCA5A5),
+      child: InkWell(
+        onTap: isSubmitting ? null : onTap,
+        borderRadius: BorderRadius.circular(14),
+        child: Container(
+          height: 44,
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(
+              color: const Color(0xFFFCA5A5),
+            ),
           ),
-        ),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(
-              icon,
-              size: 18,
-              color: const Color(0xFFEF4444),
-            ),
-            const SizedBox(width: 7),
-            Text(
-              label,
-              style: const TextStyle(
-                fontSize: 12.5,
-                color: Color(0xFFEF4444),
-                fontWeight: FontWeight.w900,
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(
+                icon,
+                size: 18,
+                color: _primaryRed,
               ),
-            ),
-          ],
+              const SizedBox(width: 7),
+              Text(
+                label,
+                style: const TextStyle(
+                  fontSize: 12.5,
+                  color: _primaryRed,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -2439,7 +2281,7 @@ class _TambahBarangKeluarScreenState extends State<TambahBarangKeluarScreen> {
                           child: const Icon(
                             Icons.close_rounded,
                             size: 16,
-                            color: Color(0xFFEF4444),
+                            color: _primaryRed,
                           ),
                         ),
                       ),
@@ -2458,7 +2300,7 @@ class _TambahBarangKeluarScreenState extends State<TambahBarangKeluarScreen> {
 
     showDialog(
       context: context,
-      barrierColor: Colors.black.withOpacity(0.82),
+      barrierColor: Colors.black.withValues(alpha: 0.82),
       builder: (context) {
         return Dialog(
           insetPadding: const EdgeInsets.all(16),
@@ -2487,7 +2329,7 @@ class _TambahBarangKeluarScreenState extends State<TambahBarangKeluarScreen> {
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(
                           fontSize: 14,
-                          color: Color(0xFF111827),
+                          color: _darkText,
                           fontWeight: FontWeight.w900,
                         ),
                       ),
@@ -2500,7 +2342,7 @@ class _TambahBarangKeluarScreenState extends State<TambahBarangKeluarScreen> {
                         child: Icon(
                           Icons.close_rounded,
                           size: 22,
-                          color: Color(0xFF6B7280),
+                          color: _softText,
                         ),
                       ),
                     ),
@@ -2548,7 +2390,7 @@ class _TambahBarangKeluarScreenState extends State<TambahBarangKeluarScreen> {
                         ),
                         label: const Text('Hapus Foto'),
                         style: OutlinedButton.styleFrom(
-                          foregroundColor: const Color(0xFFEF4444),
+                          foregroundColor: _primaryRed,
                           side: const BorderSide(
                             color: Color(0xFFFECACA),
                           ),
@@ -2568,7 +2410,7 @@ class _TambahBarangKeluarScreenState extends State<TambahBarangKeluarScreen> {
                         ),
                         label: const Text('Selesai'),
                         style: ElevatedButton.styleFrom(
-                          backgroundColor: const Color(0xFFEF4444),
+                          backgroundColor: _primaryRed,
                           foregroundColor: Colors.white,
                           elevation: 0,
                           shape: RoundedRectangleBorder(
@@ -2591,7 +2433,7 @@ class _TambahBarangKeluarScreenState extends State<TambahBarangKeluarScreen> {
     return SafeArea(
       top: false,
       child: Container(
-        padding: const EdgeInsets.fromLTRB(14, 10, 14, 12),
+        padding: const EdgeInsets.fromLTRB(16, 10, 16, 12),
         decoration: const BoxDecoration(
           color: Colors.white,
           boxShadow: [
@@ -2604,7 +2446,7 @@ class _TambahBarangKeluarScreenState extends State<TambahBarangKeluarScreen> {
         ),
         child: SizedBox(
           width: double.infinity,
-          height: 48,
+          height: 50,
           child: ElevatedButton.icon(
             onPressed: isSubmitting || formTidakValid ? null : _submitForm,
             icon: isSubmitting
@@ -2624,17 +2466,17 @@ class _TambahBarangKeluarScreenState extends State<TambahBarangKeluarScreen> {
                   ),
             label: Text(
               isSubmitting
-                  ? 'MENGIRIM...'
+                  ? 'Mengirim...'
                   : widget.isEdit
-                      ? 'PERBARUI BARANG KELUAR'
-                      : 'KIRIM PENGAJUAN BARANG KELUAR',
+                      ? 'Perbarui Barang Keluar'
+                      : 'Kirim Pengajuan Barang Keluar',
               style: const TextStyle(
                 fontSize: 12.5,
                 fontWeight: FontWeight.w900,
               ),
             ),
             style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFFEF4444),
+              backgroundColor: _primaryRed,
               disabledBackgroundColor: const Color(0xFFFCA5A5),
               foregroundColor: Colors.white,
               elevation: 0,
@@ -2648,6 +2490,39 @@ class _TambahBarangKeluarScreenState extends State<TambahBarangKeluarScreen> {
     );
   }
 
+
+  void _showBarangPicker() {
+    showOutboundStockPicker(
+      context: context,
+      searchController: barangSearchController,
+      stocks: stocks,
+      selectedStockKey: selectedStockKey,
+      stockKey: _stockKey,
+      stockProductName: _stockProductName,
+      stockProductCode: _stockProductCode,
+      stockWarehouseName: _stockWarehouseName,
+      stockSize: _stockSize,
+      stockUnit: _stockUnit,
+      stockType: _stockType,
+      stockDensity: _stockDensity,
+      stockCategory: _stockCategory,
+      availableQty: _availableQty,
+      stockLogoBuilder: (
+        Map<String, dynamic> item, {
+        double size = 40,
+        bool selected = false,
+      }) {
+        return _buildProductLogo(
+          item,
+          size: size,
+          selected: selected,
+        );
+      },
+      onSelected: _selectStock,
+    );
+  }
+
+
   Widget _sectionCard({
     required String title,
     required String subtitle,
@@ -2660,16 +2535,16 @@ class _TambahBarangKeluarScreenState extends State<TambahBarangKeluarScreen> {
       width: double.infinity,
       padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(22),
+        color: Colors.white.withValues(alpha: 0.97),
+        borderRadius: BorderRadius.circular(20),
         border: Border.all(
-          color: const Color(0xFFE5E7EB),
+          color: _borderColor,
         ),
-        boxShadow: const [
+        boxShadow: [
           BoxShadow(
-            color: Color(0x0F000000),
-            blurRadius: 10,
-            offset: Offset(0, 4),
+            color: const Color(0xFF1E3A8A).withValues(alpha: 0.04),
+            blurRadius: 14,
+            offset: const Offset(0, 6),
           ),
         ],
       ),
@@ -2683,34 +2558,39 @@ class _TambahBarangKeluarScreenState extends State<TambahBarangKeluarScreen> {
                 decoration: BoxDecoration(
                   color: iconBgColor,
                   borderRadius: BorderRadius.circular(13),
+                  border: Border.all(
+                    color: iconColor.withValues(alpha: 0.12),
+                  ),
                 ),
                 child: Icon(
                   icon,
                   color: iconColor,
-                  size: 21,
+                  size: 20,
                 ),
               ),
-              const SizedBox(width: 10),
+              const SizedBox(width: 11),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
                       title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
                       style: const TextStyle(
-                        fontSize: 15.5,
-                        color: Color(0xFF111827),
+                        fontSize: 14,
+                        color: _darkText,
                         fontWeight: FontWeight.w900,
                       ),
                     ),
-                    const SizedBox(height: 2),
+                    const SizedBox(height: 3),
                     Text(
                       subtitle,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(
-                        fontSize: 11.5,
-                        color: Color(0xFF6B7280),
+                        fontSize: 11.2,
+                        color: _softText,
                         fontWeight: FontWeight.w600,
                       ),
                     ),
@@ -2726,21 +2606,6 @@ class _TambahBarangKeluarScreenState extends State<TambahBarangKeluarScreen> {
     );
   }
 
-  Widget _pickerInputField({
-    required String label,
-    required TextEditingController controller,
-    required String hintText,
-    required VoidCallback onTap,
-  }) {
-    return _inputField(
-      label: label,
-      controller: controller,
-      hintText: hintText,
-      readOnly: true,
-      onTap: onTap,
-      suffixIcon: Icons.keyboard_arrow_down_rounded,
-    );
-  }
 
   Widget _inputField({
     required String label,
@@ -2749,6 +2614,7 @@ class _TambahBarangKeluarScreenState extends State<TambahBarangKeluarScreen> {
     int maxLines = 1,
     TextInputType keyboardType = TextInputType.text,
     bool readOnly = false,
+    bool enableInteractiveSelection = true,
     VoidCallback? onTap,
     IconData? suffixIcon,
     Function(String)? onChanged,
@@ -2763,11 +2629,13 @@ class _TambahBarangKeluarScreenState extends State<TambahBarangKeluarScreen> {
           maxLines: maxLines,
           keyboardType: keyboardType,
           readOnly: readOnly,
+          enableInteractiveSelection: enableInteractiveSelection,
           onTap: onTap,
           onChanged: onChanged,
+          cursorColor: _primaryRed,
           style: const TextStyle(
             fontSize: 12.5,
-            color: Color(0xFF111827),
+            color: _darkText,
             fontWeight: FontWeight.w700,
           ),
           decoration: InputDecoration(
@@ -2784,7 +2652,7 @@ class _TambahBarangKeluarScreenState extends State<TambahBarangKeluarScreen> {
                 ? null
                 : Icon(
                     suffixIcon,
-                    color: const Color(0xFFEF4444),
+                    color: _primaryRed,
                     size: 18,
                   ),
             contentPadding: EdgeInsets.symmetric(
@@ -2794,19 +2662,19 @@ class _TambahBarangKeluarScreenState extends State<TambahBarangKeluarScreen> {
             border: OutlineInputBorder(
               borderRadius: BorderRadius.circular(14),
               borderSide: const BorderSide(
-                color: Color(0xFFE5E7EB),
+                color: _borderColor,
               ),
             ),
             enabledBorder: OutlineInputBorder(
               borderRadius: BorderRadius.circular(14),
               borderSide: const BorderSide(
-                color: Color(0xFFE5E7EB),
+                color: _borderColor,
               ),
             ),
             focusedBorder: OutlineInputBorder(
               borderRadius: BorderRadius.circular(14),
               borderSide: const BorderSide(
-                color: Color(0xFFEF4444),
+                color: _primaryRed,
               ),
             ),
           ),
@@ -2827,14 +2695,98 @@ class _TambahBarangKeluarScreenState extends State<TambahBarangKeluarScreen> {
       ),
     );
   }
+
+
+  void _showSnackBar(String message, {bool isError = false}) {
+    if (!mounted) return;
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          message,
+          style: const TextStyle(
+            color: Colors.white,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+        behavior: SnackBarBehavior.floating,
+        backgroundColor: isError ? _primaryRed : const Color(0xFF16A34A),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(14),
+        ),
+      ),
+    );
+  }
 }
 
-class _PickedAttachment {
-  final Uint8List bytes;
-  final String fileName;
+class _HeaderIconButton extends StatelessWidget {
+  final IconData icon;
+  final VoidCallback onTap;
 
-  const _PickedAttachment({
-    required this.bytes,
-    required this.fileName,
+  const _HeaderIconButton({
+    required this.icon,
+    required this.onTap,
   });
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.white.withValues(alpha: 0.16),
+      borderRadius: BorderRadius.circular(14),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(14),
+        child: SizedBox(
+          width: 40,
+          height: 40,
+          child: Icon(
+            icon,
+            color: Colors.white,
+            size: 19,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _OutboundFormBackgroundPainter extends CustomPainter {
+  const _OutboundFormBackgroundPainter();
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..shader = const LinearGradient(
+        begin: Alignment.topCenter,
+        end: Alignment.bottomCenter,
+        colors: [
+          Color(0xFFFFFFFF),
+          Color(0xFFF7FAFC),
+          Color(0xFFFFF1F2),
+        ],
+      ).createShader(Offset.zero & size);
+
+    canvas.drawRect(Offset.zero & size, paint);
+
+    final topCircle = Paint()
+      ..color = const Color(0xFFFFECEC).withValues(alpha: 0.65);
+
+    canvas.drawCircle(
+      Offset(size.width * 0.08, size.height * 0.10),
+      size.width * 0.35,
+      topCircle,
+    );
+
+    final bottomCircle = Paint()
+      ..color = const Color(0xFFEFF6FF).withValues(alpha: 0.55);
+
+    canvas.drawCircle(
+      Offset(size.width * 0.92, size.height * 0.88),
+      size.width * 0.40,
+      bottomCircle,
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }

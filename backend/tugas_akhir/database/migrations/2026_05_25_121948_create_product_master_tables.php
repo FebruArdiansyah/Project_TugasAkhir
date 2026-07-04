@@ -129,6 +129,7 @@ return new class extends Migration
             $table->decimal('last_selling_price', 15, 2)->default(0);
 
             $table->text('description')->nullable();
+            $table->string('logo_path')->nullable();
             $table->boolean('is_active')->default(true);
 
             $table->timestamps();

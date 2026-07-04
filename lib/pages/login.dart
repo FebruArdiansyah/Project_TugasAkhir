@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_animate/flutter_animate.dart';
 
 import '../services/api_service.dart';
 import '../services/auth_service.dart';
@@ -11,25 +13,39 @@ class LoginScreen extends StatefulWidget {
 }
 
 class _LoginScreenState extends State<LoginScreen> {
-  final TextEditingController usernameController = TextEditingController();
+  final TextEditingController emailController = TextEditingController();
   final TextEditingController passwordController = TextEditingController();
 
   bool isPasswordHidden = true;
   bool isLoading = false;
 
   @override
+  void initState() {
+    super.initState();
+
+    SystemChrome.setSystemUIOverlayStyle(
+      const SystemUiOverlayStyle(
+        statusBarColor: Colors.transparent,
+        statusBarIconBrightness: Brightness.dark,
+        systemNavigationBarColor: Colors.white,
+        systemNavigationBarIconBrightness: Brightness.dark,
+      ),
+    );
+  }
+
+  @override
   void dispose() {
-    usernameController.dispose();
+    emailController.dispose();
     passwordController.dispose();
     super.dispose();
   }
 
   Future<void> _handleLogin() async {
-    final login = usernameController.text.trim();
+    final email = emailController.text.trim();
     final password = passwordController.text.trim();
 
-    if (login.isEmpty) {
-      _showMessage('Username / email wajib diisi');
+    if (email.isEmpty) {
+      _showMessage('Email wajib diisi');
       return;
     }
 
@@ -46,7 +62,7 @@ class _LoginScreenState extends State<LoginScreen> {
 
     try {
       await AuthService.login(
-        login: login,
+        login: email,
         password: password,
         deviceName: 'flutter-web',
       );
@@ -72,197 +88,234 @@ class _LoginScreenState extends State<LoginScreen> {
 
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text(message),
+        content: Text(
+          message,
+          style: const TextStyle(
+            color: Colors.white,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
         behavior: SnackBarBehavior.floating,
         backgroundColor: const Color(0xFFEF4444),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(14),
+        ),
       ),
     );
+  }
+
+  double _limit(double value, double min, double max) {
+    if (value < min) return min;
+    if (value > max) return max;
+    return value;
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: const Color(0xFFF8FBFF),
       resizeToAvoidBottomInset: true,
-      body: Container(
-        width: double.infinity,
-        decoration: const BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-            colors: [
-              Color(0xFFF3F6FB),
-              Color(0xFFD8E6FB),
-              Color(0xFF0E78FF),
-            ],
-            stops: [0.0, 0.45, 1.0],
+      body: Stack(
+        children: [
+          const Positioned.fill(
+            child: CustomPaint(
+              painter: LoginMockupBackgroundPainter(),
+            ),
           ),
-        ),
-        child: SafeArea(
-          child: LayoutBuilder(
-            builder: (context, constraints) {
-              return SingleChildScrollView(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 28, vertical: 24),
-                child: ConstrainedBox(
-                  constraints:
-                      BoxConstraints(minHeight: constraints.maxHeight - 48),
-                  child: IntrinsicHeight(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
+          SafeArea(
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                final width = constraints.maxWidth;
+                final height = constraints.maxHeight;
+
+                final safeHeight = height < 640 ? 640.0 : height;
+                final contentWidth = _limit(width * 0.84, 270, 390);
+                final logoWidth = _limit(width * 0.74, 230, 330);
+
+                return SingleChildScrollView(
+                  physics: const BouncingScrollPhysics(),
+                  keyboardDismissBehavior:
+                      ScrollViewKeyboardDismissBehavior.onDrag,
+                  child: SizedBox(
+                    width: width,
+                    height: safeHeight,
+                    child: Stack(
+                      alignment: Alignment.center,
                       children: [
-                        const SizedBox(height: 24),
-
-                        Center(child: _buildLogo()),
-
-                        const SizedBox(height: 40),
-
-                        const Center(
-                          child: Text(
-                            'Selamat Datang !',
-                            textAlign: TextAlign.center,
-                            style: TextStyle(
-                              fontSize: 28,
-                              fontWeight: FontWeight.w700,
-                              color: Color(0xFF3342A3),
-                            ),
-                          ),
+                        Positioned(
+                          top: safeHeight * 0.105,
+                          child: Image.asset(
+                            'assets/images/logo.png',
+                            width: logoWidth,
+                            fit: BoxFit.contain,
+                            filterQuality: FilterQuality.high,
+                          )
+                              .animate()
+                              .fadeIn(
+                                duration: 700.ms,
+                                curve: Curves.easeOutCubic,
+                              )
+                              .slideY(
+                                begin: -0.05,
+                                end: 0,
+                                duration: 700.ms,
+                                curve: Curves.easeOutCubic,
+                              ),
                         ),
-
-                        const SizedBox(height: 44),
-
-                        const Text(
-                          'Username / Email',
-                          style: TextStyle(
-                            fontSize: 15,
-                            color: Color(0xFF617194),
-                            fontWeight: FontWeight.w500,
-                          ),
-                        ),
-                        const SizedBox(height: 10),
-                        _buildTextField(
-                          controller: usernameController,
-                          hintText: 'Masukkan username atau email',
-                          prefixIcon: Icons.person_outline,
-                          textInputAction: TextInputAction.next,
-                        ),
-
-                        const SizedBox(height: 24),
-
-                        const Text(
-                          'Password',
-                          style: TextStyle(
-                            fontSize: 15,
-                            color: Color(0xFF617194),
-                            fontWeight: FontWeight.w500,
-                          ),
-                        ),
-                        const SizedBox(height: 10),
-                        _buildTextField(
-                          controller: passwordController,
-                          hintText: 'Masukkan password',
-                          prefixIcon: Icons.lock_outline,
-                          isPassword: true,
-                          textInputAction: TextInputAction.done,
-                          onSubmitted: (_) => _handleLogin(),
-                        ),
-
-                        const SizedBox(height: 36),
-
-                        Center(
-                          child: SizedBox(
-                            width: 200,
-                            height: 52,
-                            child: ElevatedButton(
-                              onPressed: isLoading ? null : _handleLogin,
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: const Color(0xFF3342A3),
-                                foregroundColor: Colors.white,
-                                disabledBackgroundColor:
-                                    const Color(0xFF9AA5BD),
-                                disabledForegroundColor: Colors.white,
-                                elevation: 4,
-                                shadowColor: const Color(0x33000000),
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(14),
+                        Positioned(
+                          top: safeHeight * 0.385,
+                          width: contentWidth,
+                          child: const Column(
+                            children: [
+                              Text(
+                                'Selamat datang!',
+                                textAlign: TextAlign.center,
+                                style: TextStyle(
+                                  fontSize: 26,
+                                  height: 1.08,
+                                  color: Color(0xFF2F3192),
+                                  fontWeight: FontWeight.w900,
+                                  letterSpacing: -0.2,
                                 ),
                               ),
-                              child: isLoading
-                                  ? const SizedBox(
-                                      width: 22,
-                                      height: 22,
-                                      child: CircularProgressIndicator(
-                                        strokeWidth: 2.4,
-                                        color: Colors.white,
-                                      ),
+                              SizedBox(height: 9),
+                              Text(
+                                'Silakan masuk untuk melanjutkan',
+                                textAlign: TextAlign.center,
+                                style: TextStyle(
+                                  fontSize: 14.5,
+                                  height: 1.28,
+                                  color: Color(0xFF667085),
+                                  fontWeight: FontWeight.w600,
+                                  letterSpacing: -0.1,
+                                ),
+                              ),
+                            ],
+                          )
+                              .animate()
+                              .fadeIn(
+                                delay: 160.ms,
+                                duration: 650.ms,
+                                curve: Curves.easeOut,
+                              )
+                              .slideY(
+                                begin: 0.08,
+                                end: 0,
+                                delay: 160.ms,
+                                duration: 650.ms,
+                                curve: Curves.easeOutCubic,
+                              ),
+                        ),
+                        Positioned(
+                          top: safeHeight * 0.535,
+                          width: contentWidth,
+                          child: AutofillGroup(
+                            child: Column(
+                              children: [
+                                _buildInputField(
+                                  controller: emailController,
+                                  hintText: 'Email',
+                                  prefixIcon: Icons.person_outline_rounded,
+                                  keyboardType: TextInputType.emailAddress,
+                                  textInputAction: TextInputAction.next,
+                                  autofillHints: const [
+                                    AutofillHints.email,
+                                  ],
+                                )
+                                    .animate()
+                                    .fadeIn(
+                                      delay: 260.ms,
+                                      duration: 600.ms,
+                                      curve: Curves.easeOut,
                                     )
-                                  : const Text(
-                                      'MASUK',
-                                      style: TextStyle(
-                                        fontSize: 16,
-                                        fontWeight: FontWeight.w700,
-                                        letterSpacing: 0.5,
-                                      ),
+                                    .slideY(
+                                      begin: 0.12,
+                                      end: 0,
+                                      delay: 260.ms,
+                                      duration: 600.ms,
+                                      curve: Curves.easeOutCubic,
                                     ),
+                                const SizedBox(height: 18),
+                                _buildInputField(
+                                  controller: passwordController,
+                                  hintText: 'Password',
+                                  prefixIcon: Icons.lock_outline_rounded,
+                                  isPassword: true,
+                                  keyboardType: TextInputType.visiblePassword,
+                                  textInputAction: TextInputAction.done,
+                                  autofillHints: const [
+                                    AutofillHints.password,
+                                  ],
+                                  onSubmitted: (_) => _handleLogin(),
+                                )
+                                    .animate()
+                                    .fadeIn(
+                                      delay: 340.ms,
+                                      duration: 600.ms,
+                                      curve: Curves.easeOut,
+                                    )
+                                    .slideY(
+                                      begin: 0.12,
+                                      end: 0,
+                                      delay: 340.ms,
+                                      duration: 600.ms,
+                                      curve: Curves.easeOutCubic,
+                                    ),
+                                const SizedBox(height: 30),
+                                _buildLoginButton()
+                                    .animate()
+                                    .fadeIn(
+                                      delay: 430.ms,
+                                      duration: 650.ms,
+                                      curve: Curves.easeOut,
+                                    )
+                                    .slideY(
+                                      begin: 0.14,
+                                      end: 0,
+                                      delay: 430.ms,
+                                      duration: 650.ms,
+                                      curve: Curves.easeOutCubic,
+                                    ),
+                              ],
                             ),
                           ),
                         ),
-
-                        const Spacer(),
                       ],
                     ),
                   ),
-                ),
-              );
-            },
+                );
+              },
+            ),
           ),
-        ),
+        ],
       ),
     );
   }
 
-  Widget _buildLogo() {
-    return const Column(
-      children: [
-        Text(
-          'NSA',
-          style: TextStyle(
-            fontSize: 56,
-            fontWeight: FontWeight.w800,
-            color: Color(0xFF3342A3),
-            letterSpacing: 3,
-          ),
-        ),
-        SizedBox(height: 6),
-        Text(
-          'P.T. NAURA SUKSES ABADI',
-          style: TextStyle(
-            fontSize: 14,
-            color: Color(0xFF5F6675),
-            letterSpacing: 1.2,
-            fontWeight: FontWeight.w400,
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildTextField({
+  Widget _buildInputField({
     required TextEditingController controller,
     required String hintText,
     required IconData prefixIcon,
     bool isPassword = false,
+    TextInputType keyboardType = TextInputType.text,
     TextInputAction? textInputAction,
+    Iterable<String>? autofillHints,
     ValueChanged<String>? onSubmitted,
   }) {
     return Container(
+      height: 58,
       decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.95),
-        borderRadius: BorderRadius.circular(14),
-        boxShadow: const [
+        color: Colors.white.withValues(alpha: 0.94),
+        borderRadius: BorderRadius.circular(17),
+        border: Border.all(
+          color: const Color(0xFFE1E8F2),
+          width: 1,
+        ),
+        boxShadow: [
           BoxShadow(
-            color: Color(0x12000000),
-            blurRadius: 10,
-            offset: Offset(0, 4),
+            color: const Color(0xFF1E3A8A).withValues(alpha: 0.065),
+            blurRadius: 20,
+            offset: const Offset(0, 10),
           ),
         ],
       ),
@@ -270,21 +323,32 @@ class _LoginScreenState extends State<LoginScreen> {
         controller: controller,
         enabled: !isLoading,
         obscureText: isPassword ? isPasswordHidden : false,
+        keyboardType: keyboardType,
         textInputAction: textInputAction,
+        autofillHints: autofillHints,
+        autocorrect: false,
+        enableSuggestions: !isPassword,
+        keyboardAppearance: Brightness.dark,
         onSubmitted: onSubmitted,
+        cursorColor: const Color(0xFF005BEA),
         style: const TextStyle(
-          fontSize: 15,
-          color: Color(0xFF3342A3),
+          fontSize: 16,
+          color: Color(0xFF111827),
+          fontWeight: FontWeight.w600,
+          letterSpacing: -0.1,
         ),
         decoration: InputDecoration(
           hintText: hintText,
           hintStyle: const TextStyle(
-            color: Color(0xFF9AA5BD),
-            fontSize: 15,
+            fontSize: 16,
+            color: Color(0xFF8B96A8),
+            fontWeight: FontWeight.w500,
+            letterSpacing: -0.1,
           ),
           prefixIcon: Icon(
             prefixIcon,
-            color: const Color(0xFF6A78A8),
+            size: 24,
+            color: const Color(0xFF8B96A8),
           ),
           suffixIcon: isPassword
               ? IconButton(
@@ -299,37 +363,293 @@ class _LoginScreenState extends State<LoginScreen> {
                     isPasswordHidden
                         ? Icons.visibility_outlined
                         : Icons.visibility_off_outlined,
-                    color: const Color(0xFF6A78A8),
+                    size: 24,
+                    color: const Color(0xFF8B96A8),
                   ),
                 )
               : null,
           filled: true,
-          fillColor: Colors.white,
-          border: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(14),
-            borderSide: BorderSide.none,
-          ),
-          enabledBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(14),
-            borderSide: BorderSide.none,
-          ),
-          disabledBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(14),
-            borderSide: BorderSide.none,
-          ),
-          focusedBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(14),
-            borderSide: const BorderSide(
-              color: Color(0xFF3342A3),
-              width: 1.2,
-            ),
-          ),
+          fillColor: Colors.transparent,
+          border: InputBorder.none,
+          enabledBorder: InputBorder.none,
+          focusedBorder: InputBorder.none,
+          disabledBorder: InputBorder.none,
           contentPadding: const EdgeInsets.symmetric(
             horizontal: 16,
-            vertical: 18,
+            vertical: 17,
           ),
         ),
       ),
     );
   }
+
+  Widget _buildLoginButton() {
+    return Material(
+      color: Colors.transparent,
+      borderRadius: BorderRadius.circular(17),
+      child: InkWell(
+        onTap: isLoading ? null : _handleLogin,
+        borderRadius: BorderRadius.circular(17),
+        child: Ink(
+          width: double.infinity,
+          height: 58,
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(17),
+            gradient: LinearGradient(
+              begin: Alignment.centerLeft,
+              end: Alignment.centerRight,
+              colors: isLoading
+                  ? const [
+                      Color(0xFF94A3B8),
+                      Color(0xFF94A3B8),
+                    ]
+                  : const [
+                      Color(0xFF0EA5E9),
+                      Color(0xFF0062F5),
+                    ],
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: const Color(0xFF0062F5).withValues(alpha: 0.22),
+                blurRadius: 20,
+                offset: const Offset(0, 10),
+              ),
+            ],
+          ),
+          child: Center(
+            child: isLoading
+                ? const SizedBox(
+                    width: 23,
+                    height: 23,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2.6,
+                      color: Colors.white,
+                    ),
+                  )
+                : const Text(
+                    'Masuk',
+                    style: TextStyle(
+                      fontSize: 18,
+                      color: Colors.white,
+                      fontWeight: FontWeight.w900,
+                      letterSpacing: -0.1,
+                    ),
+                  ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class LoginMockupBackgroundPainter extends CustomPainter {
+  const LoginMockupBackgroundPainter();
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final basePaint = Paint()
+      ..shader = const LinearGradient(
+        begin: Alignment.topCenter,
+        end: Alignment.bottomCenter,
+        colors: [
+          Color(0xFFFFFFFF),
+          Color(0xFFFBFDFF),
+          Color(0xFFF1F7FF),
+        ],
+        stops: [0.0, 0.54, 1.0],
+      ).createShader(Offset.zero & size);
+
+    canvas.drawRect(Offset.zero & size, basePaint);
+
+    _drawTopLeftPattern(canvas, size);
+    _drawMainSoftCurve(canvas, size);
+    _drawRightGlow(canvas, size);
+    _drawBottomRightPattern(canvas, size);
+  }
+
+  void _drawTopLeftPattern(Canvas canvas, Size size) {
+    final glowPaint = Paint()
+      ..shader = RadialGradient(
+        center: Alignment.topLeft,
+        radius: 1.05,
+        colors: [
+          const Color(0xFFD9EAFF).withValues(alpha: 0.92),
+          const Color(0xFFEAF4FF).withValues(alpha: 0.48),
+          Colors.white.withValues(alpha: 0),
+        ],
+        stops: const [0.0, 0.58, 1.0],
+      ).createShader(
+        Rect.fromLTWH(
+          -size.width * 0.38,
+          -size.height * 0.18,
+          size.width * 0.95,
+          size.height * 0.48,
+        ),
+      );
+
+    canvas.drawOval(
+      Rect.fromLTWH(
+        -size.width * 0.42,
+        -size.height * 0.18,
+        size.width * 1.02,
+        size.height * 0.50,
+      ),
+      glowPaint,
+    );
+
+    final patternPaint = Paint()
+      ..color = const Color(0xFFDCEBFF).withValues(alpha: 0.42);
+
+    canvas.save();
+    canvas.translate(-size.width * 0.07, size.height * 0.02);
+    canvas.rotate(-0.55);
+
+    for (int i = 0; i < 3; i++) {
+      final rect = RRect.fromRectAndRadius(
+        Rect.fromLTWH(
+          0,
+          i * 50,
+          size.width * 0.40,
+          37,
+        ),
+        const Radius.circular(18),
+      );
+
+      canvas.drawRRect(rect, patternPaint);
+    }
+
+    canvas.restore();
+  }
+
+  void _drawMainSoftCurve(Canvas canvas, Size size) {
+    final curvePaint = Paint()
+      ..shader = LinearGradient(
+        begin: Alignment.topRight,
+        end: Alignment.bottomLeft,
+        colors: [
+          Colors.white.withValues(alpha: 0),
+          const Color(0xFFEAF4FF).withValues(alpha: 0.48),
+          const Color(0xFFDDEEFF).withValues(alpha: 0.22),
+        ],
+        stops: const [0.0, 0.55, 1.0],
+      ).createShader(
+        Rect.fromLTWH(
+          0,
+          size.height * 0.22,
+          size.width,
+          size.height * 0.78,
+        ),
+      );
+
+    final path = Path()
+      ..moveTo(size.width, size.height * 0.34)
+      ..cubicTo(
+        size.width * 0.88,
+        size.height * 0.48,
+        size.width * 0.80,
+        size.height * 0.68,
+        size.width * 0.48,
+        size.height * 0.83,
+      )
+      ..cubicTo(
+        size.width * 0.28,
+        size.height * 0.92,
+        size.width * 0.10,
+        size.height * 0.97,
+        0,
+        size.height,
+      )
+      ..lineTo(size.width, size.height)
+      ..close();
+
+    canvas.drawPath(path, curvePaint);
+  }
+
+  void _drawRightGlow(Canvas canvas, Size size) {
+    final glowPaint = Paint()
+      ..shader = RadialGradient(
+        center: Alignment.centerRight,
+        radius: 1.0,
+        colors: [
+          const Color(0xFFD8EAFF).withValues(alpha: 0.62),
+          const Color(0xFFEAF4FF).withValues(alpha: 0.28),
+          Colors.white.withValues(alpha: 0),
+        ],
+        stops: const [0.0, 0.58, 1.0],
+      ).createShader(
+        Rect.fromLTWH(
+          size.width * 0.52,
+          size.height * 0.30,
+          size.width * 0.70,
+          size.height * 0.48,
+        ),
+      );
+
+    canvas.drawOval(
+      Rect.fromLTWH(
+        size.width * 0.54,
+        size.height * 0.29,
+        size.width * 0.78,
+        size.height * 0.52,
+      ),
+      glowPaint,
+    );
+  }
+
+  void _drawBottomRightPattern(Canvas canvas, Size size) {
+    final glowPaint = Paint()
+      ..shader = RadialGradient(
+        center: Alignment.bottomRight,
+        radius: 1.05,
+        colors: [
+          const Color(0xFFD8EAFF).withValues(alpha: 0.76),
+          const Color(0xFFEAF4FF).withValues(alpha: 0.36),
+          Colors.white.withValues(alpha: 0),
+        ],
+        stops: const [0.0, 0.60, 1.0],
+      ).createShader(
+        Rect.fromLTWH(
+          size.width * 0.42,
+          size.height * 0.72,
+          size.width * 0.82,
+          size.height * 0.42,
+        ),
+      );
+
+    canvas.drawOval(
+      Rect.fromLTWH(
+        size.width * 0.42,
+        size.height * 0.70,
+        size.width * 0.90,
+        size.height * 0.48,
+      ),
+      glowPaint,
+    );
+
+    final patternPaint = Paint()
+      ..color = const Color(0xFFDCEBFF).withValues(alpha: 0.44);
+
+    canvas.save();
+    canvas.translate(size.width * 0.72, size.height * 0.82);
+    canvas.rotate(-0.52);
+
+    for (int i = 0; i < 3; i++) {
+      final rect = RRect.fromRectAndRadius(
+        Rect.fromLTWH(
+          0,
+          i * 46,
+          size.width * 0.40,
+          34,
+        ),
+        const Radius.circular(18),
+      );
+
+      canvas.drawRRect(rect, patternPaint);
+    }
+
+    canvas.restore();
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }

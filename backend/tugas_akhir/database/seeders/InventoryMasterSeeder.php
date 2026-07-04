@@ -10,11 +10,25 @@ use App\Models\Supplier;
 use App\Models\Unit;
 use App\Models\Warehouse;
 use Illuminate\Database\Seeder;
+use Illuminate\Support\Facades\File;
+use Illuminate\Support\Facades\Storage;
 
 class InventoryMasterSeeder extends Seeder
 {
     public function run(): void
     {
+        /*
+        |--------------------------------------------------------------------------
+        | Logo Produk
+        |--------------------------------------------------------------------------
+        | Logo akan dicopy otomatis dari:
+        | database/seeders/assets/product-logos
+        |
+        | Ke:
+        | storage/app/public/products/logos
+        */
+        $this->prepareProductLogos();
+
         /*
         |--------------------------------------------------------------------------
         | Unit / Satuan
@@ -271,10 +285,25 @@ class InventoryMasterSeeder extends Seeder
         |--------------------------------------------------------------------------
         | Master Produk Naura
         |--------------------------------------------------------------------------
-        | Produk banyak diisi dari ProductNauraSeeder.
-        | Pastikan file ProductNauraSeeder.php sudah ada di database/seeders.
-        |--------------------------------------------------------------------------
         */
         $this->call(ProductNauraSeeder::class);
+    }
+
+    private function prepareProductLogos(): void
+    {
+        Storage::disk('public')->makeDirectory('products/logos');
+
+        $sourcePath = database_path('seeders/assets/product-logos');
+
+        if (! File::exists($sourcePath)) {
+            return;
+        }
+
+        foreach (File::files($sourcePath) as $file) {
+            Storage::disk('public')->put(
+                'products/logos/' . $file->getFilename(),
+                File::get($file->getPathname())
+            );
+        }
     }
 }

@@ -1,5 +1,12 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_animate/flutter_animate.dart';
+
 import '../services/api_service.dart';
+import '../widgets/history/history_filter_sheet.dart';
+import '../widgets/history/history_pagination.dart';
+import '../widgets/history/history_search_bar.dart';
+import '../widgets/history/history_tab_filter.dart';
+import '../widgets/history/history_transaction_card.dart';
 import 'app_bottom_nav.dart';
 import 'detail_barang_keluar.dart';
 import 'detail_barang_masuk.dart';
@@ -12,19 +19,27 @@ class RiwayatTransaksiScreen extends StatefulWidget {
 }
 
 class _RiwayatTransaksiScreenState extends State<RiwayatTransaksiScreen> {
-  int selectedTab = 0;
+  static const Color _bgColor = Color(0xFFF8FBFF);
+  static const Color _primaryBlue = Color(0xFF005BEA);
+  static const Color _darkText = Color(0xFF111827);
+  static const Color _softText = Color(0xFF667085);
+  static const Color _borderColor = Color(0xFFE5EAF2);
+
+  int selectedTypeFilter = 0;
+  String selectedStatusFilter = 'all';
+
   bool _isArgumentLoaded = false;
+  bool isLoading = false;
 
   DateTime? dariTanggal;
   DateTime? sampaiTanggal;
+
+  String? errorMessage;
 
   final TextEditingController searchController = TextEditingController();
 
   int currentPage = 1;
   final int itemsPerPage = 5;
-
-  bool isLoading = false;
-  String? errorMessage;
 
   List<Map<String, dynamic>> transaksiList = [];
 
@@ -43,7 +58,25 @@ class _RiwayatTransaksiScreenState extends State<RiwayatTransaksiScreen> {
     final args = ModalRoute.of(context)?.settings.arguments;
 
     if (args is Map && args['selectedTab'] is int) {
-      selectedTab = args['selectedTab'] as int;
+      final tab = args['selectedTab'] as int;
+
+      if (tab == 1 || tab == 2) {
+        selectedTypeFilter = tab;
+      } else if (tab == 3) {
+        selectedStatusFilter = 'pending';
+      } else if (tab == 4) {
+        selectedStatusFilter = 'approved';
+      } else if (tab == 5) {
+        selectedStatusFilter = 'rejected';
+      }
+    }
+
+    if (args is Map && args['selectedTypeFilter'] is int) {
+      selectedTypeFilter = args['selectedTypeFilter'] as int;
+    }
+
+    if (args is Map && args['selectedStatusFilter'] is String) {
+      selectedStatusFilter = args['selectedStatusFilter'] as String;
     }
 
     _isArgumentLoaded = true;
@@ -77,13 +110,28 @@ class _RiwayatTransaksiScreenState extends State<RiwayatTransaksiScreen> {
       }
 
       final mapped = data.map<Map<String, dynamic>>((raw) {
-        final item = raw as Map<String, dynamic>;
+        final item = raw is Map<String, dynamic>
+            ? raw
+            : raw is Map
+                ? Map<String, dynamic>.from(raw)
+                : <String, dynamic>{};
 
         final type = item['type']?.toString() ?? '';
         final isMasuk = type == 'inbound';
 
         final tanggal = _parseDate(item['transaction_date']) ?? DateTime.now();
         final createdAt = _parseDateTime(item['created_at']) ?? tanggal;
+
+        final inputOleh = _firstNonEmpty([
+          item['submitted_by_name'],
+          item['submitted_by'],
+          item['created_by_name'],
+          item['created_by'],
+          item['user_name'],
+          item['admin_name'],
+          item['input_by_name'],
+          item['input_by'],
+        ]);
 
         return {
           'id': item['id'],
@@ -97,13 +145,14 @@ class _RiwayatTransaksiScreenState extends State<RiwayatTransaksiScreen> {
           'warehouse': item['warehouse_name']?.toString() ?? '-',
           'totalBarang': '${_formatQty(_toDouble(item['total_qty']))} PCS',
           'totalQty': _toDouble(item['total_qty']),
-          'totalItems': int.tryParse(item['total_items'].toString()) ?? 0,
+          'totalItems':
+              int.tryParse(item['total_items']?.toString() ?? '0') ?? 0,
           'kode': item['transaction_number']?.toString() ?? '-',
           'referenceNumber': item['reference_number']?.toString(),
           'nama': item['type_label']?.toString() ??
               (isMasuk ? 'Barang Masuk' : 'Barang Keluar'),
           'status': _formatStatus(item['status']?.toString()),
-          'inputOleh': item['submitted_by_name']?.toString() ?? 'User Mobile',
+          'inputOleh': inputOleh,
           'alasan': item['rejection_reason']?.toString(),
           'note': item['note']?.toString(),
           'grandTotal': _toDouble(item['grand_total']),
@@ -151,12 +200,59 @@ class _RiwayatTransaksiScreenState extends State<RiwayatTransaksiScreen> {
     }
   }
 
+  String _firstNonEmpty(List<dynamic> values) {
+    for (final value in values) {
+      final text = _readDisplayName(value);
+
+      if (text.isNotEmpty && text != '-' && text.toLowerCase() != 'null') {
+        return text;
+      }
+    }
+
+    return '-';
+  }
+
+  String _readDisplayName(dynamic value) {
+    if (value == null) return '';
+
+    if (value is Map) {
+      final map = Map<String, dynamic>.from(value);
+
+      final candidates = [
+        map['name'],
+        map['full_name'],
+        map['nama'],
+        map['nama_lengkap'],
+        map['username'],
+        map['email'],
+      ];
+
+      for (final candidate in candidates) {
+        final text = candidate?.toString().trim() ?? '';
+
+        if (text.isNotEmpty && text != '-' && text.toLowerCase() != 'null') {
+          return text;
+        }
+      }
+
+      return '';
+    }
+
+    final text = value.toString().trim();
+
+    if (text.isEmpty || text.toLowerCase() == 'null') {
+      return '';
+    }
+
+    return text;
+  }
+
   DateTime? _parseDate(dynamic value) {
     if (value == null) return null;
 
-    final raw = value.toString();
+    final raw = value.toString().trim();
 
-    if (raw.trim().isEmpty) return null;
+    if (raw.isEmpty) return null;
 
     return DateTime.tryParse(raw);
   }
@@ -164,9 +260,9 @@ class _RiwayatTransaksiScreenState extends State<RiwayatTransaksiScreen> {
   DateTime? _parseDateTime(dynamic value) {
     if (value == null) return null;
 
-    final raw = value.toString();
+    final raw = value.toString().trim();
 
-    if (raw.trim().isEmpty) return null;
+    if (raw.isEmpty) return null;
 
     return DateTime.tryParse(raw);
   }
@@ -231,11 +327,20 @@ class _RiwayatTransaksiScreenState extends State<RiwayatTransaksiScreen> {
       final DateTime tanggal = item['tanggal'] as DateTime;
       final String status = item['status'].toString().toLowerCase();
 
-      if (selectedTab == 1 && !isMasuk) return false;
-      if (selectedTab == 2 && isMasuk) return false;
-      if (selectedTab == 3 && status != 'pending') return false;
-      if (selectedTab == 4 && status != 'disetujui') return false;
-      if (selectedTab == 5 && status != 'ditolak') return false;
+      if (selectedTypeFilter == 1 && !isMasuk) return false;
+      if (selectedTypeFilter == 2 && isMasuk) return false;
+
+      if (selectedStatusFilter == 'pending' && status != 'pending') {
+        return false;
+      }
+
+      if (selectedStatusFilter == 'approved' && status != 'disetujui') {
+        return false;
+      }
+
+      if (selectedStatusFilter == 'rejected' && status != 'ditolak') {
+        return false;
+      }
 
       if (dariTanggal != null) {
         final startDate = DateTime(
@@ -313,277 +418,93 @@ class _RiwayatTransaksiScreenState extends State<RiwayatTransaksiScreen> {
     return (filteredList.length / itemsPerPage).ceil();
   }
 
+  bool get hasDateFilter => dariTanggal != null || sampaiTanggal != null;
+
   void _resetPage() {
     currentPage = 1;
   }
 
-  void _openDetail(Map<String, dynamic> item) {
-    final bool isMasuk = item['isMasuk'] as bool;
+  Future<void> _openDetail(Map<String, dynamic> item) async {
+    final type = item['type']?.toString();
 
-    Navigator.push(
+    final result = await Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (_) => isMasuk
-            ? const DetailBarangMasukScreen()
-            : const DetailBarangKeluarScreen(),
+        builder: (_) {
+          if (type == 'inbound' || type == 'masuk') {
+            return const DetailBarangMasukScreen();
+          }
+
+          return const DetailBarangKeluarScreen();
+        },
         settings: RouteSettings(
           arguments: {
             'id': item['id'],
-            'type': item['type'],
-            'kode': item['kode'],
           },
         ),
       ),
     );
+
+    if (!mounted) return;
+
+    if (result == true) {
+      await _loadTransactions();
+    }
   }
 
   void _showFilterDialog() {
-    showDialog(
+    showHistoryDateFilterSheet(
       context: context,
-      builder: (context) {
-        return StatefulBuilder(
-          builder: (context, setDialogState) {
-            return AlertDialog(
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(18),
-              ),
-              title: const Text(
-                'Filter Tanggal',
-                style: TextStyle(
-                  fontWeight: FontWeight.w900,
-                ),
-              ),
-              content: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  _filterDateBox(
-                    label: 'Dari',
-                    value: dariTanggal != null
-                        ? formatDate(dariTanggal!)
-                        : 'Pilih tanggal',
-                    onTap: () async {
-                      final picked = await showDatePicker(
-                        context: context,
-                        initialDate: dariTanggal ?? DateTime.now(),
-                        firstDate: DateTime(2000),
-                        lastDate: DateTime(2035),
-                      );
-
-                      if (picked != null) {
-                        setDialogState(() {
-                          dariTanggal = picked;
-                        });
-
-                        setState(() {
-                          _resetPage();
-                        });
-                      }
-                    },
-                  ),
-                  const SizedBox(height: 10),
-                  _filterDateBox(
-                    label: 'Sampai',
-                    value: sampaiTanggal != null
-                        ? formatDate(sampaiTanggal!)
-                        : 'Pilih tanggal',
-                    onTap: () async {
-                      final picked = await showDatePicker(
-                        context: context,
-                        initialDate: sampaiTanggal ?? DateTime.now(),
-                        firstDate: DateTime(2000),
-                        lastDate: DateTime(2035),
-                      );
-
-                      if (picked != null) {
-                        setDialogState(() {
-                          sampaiTanggal = picked;
-                        });
-
-                        setState(() {
-                          _resetPage();
-                        });
-                      }
-                    },
-                  ),
-                ],
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () {
-                    setState(() {
-                      dariTanggal = null;
-                      sampaiTanggal = null;
-                      _resetPage();
-                    });
-                    Navigator.of(context).pop();
-                  },
-                  child: const Text('Reset'),
-                ),
-                ElevatedButton(
-                  onPressed: () {
-                    setState(() {
-                      _resetPage();
-                    });
-                    Navigator.of(context).pop();
-                  },
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF2F47B7),
-                    foregroundColor: Colors.white,
-                  ),
-                  child: const Text('Terapkan'),
-                ),
-              ],
-            );
-          },
-        );
+      initialStartDate: dariTanggal,
+      initialEndDate: sampaiTanggal,
+      formatDate: formatDate,
+      onApply: (startDate, endDate) {
+        setState(() {
+          dariTanggal = startDate;
+          sampaiTanggal = endDate;
+          _resetPage();
+        });
+      },
+      onReset: () {
+        setState(() {
+          dariTanggal = null;
+          sampaiTanggal = null;
+          _resetPage();
+        });
       },
     );
-  }
-
-  List<Object> _paginationItems() {
-    if (totalPages <= 7) {
-      return List<int>.generate(totalPages, (index) => index + 1);
-    }
-
-    if (currentPage <= 4) {
-      return <Object>[1, 2, 3, 4, 5, '...', totalPages];
-    }
-
-    if (currentPage >= totalPages - 3) {
-      return <Object>[
-        1,
-        '...',
-        totalPages - 4,
-        totalPages - 3,
-        totalPages - 2,
-        totalPages - 1,
-        totalPages,
-      ];
-    }
-
-    return <Object>[
-      1,
-      '...',
-      currentPage - 1,
-      currentPage,
-      currentPage + 1,
-      '...',
-      totalPages,
-    ];
   }
 
   Widget _buildPagination() {
-    if (totalPages <= 1) return const SizedBox.shrink();
-
-    final pages = _paginationItems();
-
-    return SizedBox(
-      width: double.infinity,
-      height: 48,
-      child: SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        physics: const BouncingScrollPhysics(),
-        child: ConstrainedBox(
-          constraints: BoxConstraints(
-            minWidth: MediaQuery.of(context).size.width - 24,
-          ),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              IconButton(
-                padding: EdgeInsets.zero,
-                constraints: const BoxConstraints.tightFor(
-                  width: 36,
-                  height: 36,
-                ),
-                icon: const Icon(Icons.chevron_left_rounded, size: 22),
-                onPressed: currentPage > 1
-                    ? () {
-                        setState(() {
-                          currentPage--;
-                        });
-                      }
-                    : null,
-              ),
-              const SizedBox(width: 2),
-              ...pages.map((item) {
-                if (item == '...') {
-                  return _paginationDots();
-                }
-
-                return _pageButton(item as int);
-              }),
-              const SizedBox(width: 2),
-              IconButton(
-                padding: EdgeInsets.zero,
-                constraints: const BoxConstraints.tightFor(
-                  width: 36,
-                  height: 36,
-                ),
-                icon: const Icon(Icons.chevron_right_rounded, size: 22),
-                onPressed: currentPage < totalPages
-                    ? () {
-                        setState(() {
-                          currentPage++;
-                        });
-                      }
-                    : null,
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _paginationDots() {
-    return Container(
-      width: 22,
-      height: 34,
-      alignment: Alignment.center,
-      child: const Text(
-        '...',
-        style: TextStyle(
-          fontSize: 13,
-          color: Color(0xFF6B7280),
-          fontWeight: FontWeight.w800,
-        ),
-      ),
-    );
-  }
-
-  Widget _pageButton(int pageNum) {
-    final bool isActive = pageNum == currentPage;
-
-    return GestureDetector(
-      onTap: () {
+    return HistoryPagination(
+      currentPage: currentPage,
+      totalPages: totalPages,
+      onPageChanged: (page) {
         setState(() {
-          currentPage = pageNum;
+          currentPage = page;
         });
       },
-      child: Container(
-        margin: const EdgeInsets.symmetric(horizontal: 3),
-        width: 34,
-        height: 34,
-        alignment: Alignment.center,
-        decoration: BoxDecoration(
-          color: isActive ? const Color(0xFF2F47B7) : const Color(0xFFF1F2F6),
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(
-            color:
-                isActive ? const Color(0xFF2F47B7) : const Color(0xFFE5E7EB),
-          ),
-        ),
-        child: Text(
-          '$pageNum',
-          style: TextStyle(
-            color: isActive ? Colors.white : const Color(0xFF111827),
-            fontWeight: FontWeight.w800,
-            fontSize: 13,
-          ),
-        ),
-      ),
     );
+  }
+
+  Widget _animatedBox({
+    required Widget child,
+    required int index,
+  }) {
+    return child
+        .animate()
+        .fadeIn(
+          delay: (70 * index).ms,
+          duration: 500.ms,
+          curve: Curves.easeOut,
+        )
+        .slideY(
+          begin: 0.045,
+          end: 0,
+          delay: (70 * index).ms,
+          duration: 540.ms,
+          curve: Curves.easeOutCubic,
+        );
   }
 
   @override
@@ -591,120 +512,234 @@ class _RiwayatTransaksiScreenState extends State<RiwayatTransaksiScreen> {
     final visibleItems = paginatedList;
 
     return Scaffold(
-      backgroundColor: const Color(0xFFDCE3F1),
-      body: SafeArea(
-        child: Column(
-          children: [
-            _buildAppBar(),
-            Expanded(
-              child: RefreshIndicator(
-                onRefresh: _loadTransactions,
-                child: SingleChildScrollView(
-                  physics: const AlwaysScrollableScrollPhysics(
-                    parent: BouncingScrollPhysics(),
-                  ),
-                  padding: const EdgeInsets.fromLTRB(12, 10, 12, 12),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      _buildSearchBar(),
-                      const SizedBox(height: 10),
-                      _buildMainTabs(),
-                      const SizedBox(height: 10),
-                      _buildStatusFilter(),
+      backgroundColor: _bgColor,
+      bottomNavigationBar: const AppBottomNav(selectedIndex: 1),
+      body: Stack(
+        children: [
+          const Positioned.fill(
+            child: CustomPaint(
+              painter: _HistoryBackgroundPainter(),
+            ),
+          ),
+          SafeArea(
+            child: RefreshIndicator(
+              color: _primaryBlue,
+              backgroundColor: Colors.white,
+              onRefresh: _loadTransactions,
+              child: SingleChildScrollView(
+                physics: const AlwaysScrollableScrollPhysics(
+                  parent: BouncingScrollPhysics(),
+                ),
+                padding: const EdgeInsets.fromLTRB(16, 16, 16, 22),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _animatedBox(
+                      index: 0,
+                      child: _buildHeader(),
+                    ),
+                    const SizedBox(height: 16),
+                    _animatedBox(
+                      index: 1,
+                      child: _buildSearchBar(),
+                    ),
+                    const SizedBox(height: 11),
+                    _animatedBox(
+                      index: 2,
+                      child: _buildMainTabs(),
+                    ),
+                    const SizedBox(height: 11),
+                    _animatedBox(
+                      index: 3,
+                      child: _buildStatusFilter(),
+                    ),
+                    _buildActiveFilterInfo(),
+                    if (isLoading) ...[
                       const SizedBox(height: 12),
-                      _buildActiveFilterInfo(),
-                      if (isLoading) ...[
-                        const SizedBox(height: 10),
-                        ClipRRect(
-                          borderRadius: BorderRadius.circular(999),
-                          child: const LinearProgressIndicator(
-                            minHeight: 4,
-                            backgroundColor: Color(0xFFE5E7EB),
-                            color: Color(0xFF2F47B7),
-                          ),
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(999),
+                        child: const LinearProgressIndicator(
+                          minHeight: 4,
+                          backgroundColor: Color(0xFFE5EAF2),
+                          color: _primaryBlue,
                         ),
-                      ],
-                      const SizedBox(height: 10),
-                      _buildSectionTitle(),
-                      const SizedBox(height: 10),
-                      if (errorMessage != null && transaksiList.isEmpty)
-                        _buildErrorState()
-                      else if (filteredList.isEmpty)
-                        _buildEmptyState()
-                      else
-                        ...visibleItems.asMap().entries.map((entry) {
-                          final index = entry.key;
-                          final item = entry.value;
-                          final globalIndex =
-                              (currentPage - 1) * itemsPerPage + index + 1;
-
-                          return Padding(
-                            padding: const EdgeInsets.only(bottom: 10),
-                            child: _RiwayatApprovalCard(
-                              nomor: '$globalIndex',
-                              isMasuk: item['isMasuk'] as bool,
-                              tanggal: formatDate(item['tanggal'] as DateTime),
-                              supplier: item['supplier'].toString(),
-                              partnerLabel: item['partnerLabel'].toString(),
-                              warehouse: item['warehouse'].toString(),
-                              totalBarang: item['totalBarang'].toString(),
-                              kode: item['kode'].toString(),
-                              nama: item['nama'].toString(),
-                              status: item['status'].toString(),
-                              inputOleh: item['inputOleh'].toString(),
-                              alasan: item['alasan']?.toString(),
-                              onTap: () => _openDetail(item),
-                            ),
-                          );
-                        }),
-                      const SizedBox(height: 10),
-                      _buildPagination(),
-                      const SizedBox(height: 10),
+                      ),
                     ],
-                  ),
+                    const SizedBox(height: 16),
+                    _buildSectionTitle(),
+                    const SizedBox(height: 11),
+                    if (errorMessage != null && transaksiList.isEmpty)
+                      _buildErrorState()
+                    else if (filteredList.isEmpty)
+                      _buildEmptyState()
+                    else
+                      ...visibleItems.asMap().entries.map((entry) {
+                        final index = entry.key;
+                        final item = entry.value;
+                        final globalIndex =
+                            (currentPage - 1) * itemsPerPage + index + 1;
+
+                        return Padding(
+                          padding: const EdgeInsets.only(bottom: 11),
+                          child: HistoryTransactionCard(
+                            nomor: '$globalIndex',
+                            isMasuk: item['isMasuk'] as bool,
+                            tanggal: formatDate(item['tanggal'] as DateTime),
+                            supplier: item['supplier'].toString(),
+                            partnerLabel: item['partnerLabel'].toString(),
+                            warehouse: item['warehouse'].toString(),
+                            totalBarang: item['totalBarang'].toString(),
+                            kode: item['kode'].toString(),
+                            nama: item['nama'].toString(),
+                            status: item['status'].toString(),
+                            inputOleh: item['inputOleh'].toString(),
+                            alasan: item['alasan']?.toString(),
+                            onTap: () => _openDetail(item),
+                          )
+                              .animate()
+                              .fadeIn(
+                                delay: (45 * index).ms,
+                                duration: 420.ms,
+                                curve: Curves.easeOut,
+                              )
+                              .slideY(
+                                begin: 0.04,
+                                end: 0,
+                                delay: (45 * index).ms,
+                                duration: 460.ms,
+                                curve: Curves.easeOutCubic,
+                              ),
+                        );
+                      }),
+                    const SizedBox(height: 10),
+                    _buildPagination(),
+                    const SizedBox(height: 6),
+                  ],
                 ),
               ),
             ),
-            const AppBottomNav(selectedIndex: 1),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
 
-  Widget _buildAppBar() {
+  Widget _buildHeader() {
     return Container(
-      height: 52,
-      padding: const EdgeInsets.symmetric(horizontal: 14),
-      color: const Color(0xFF2F47B7),
-      child: Row(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(18, 18, 18, 18),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(28),
+        gradient: const LinearGradient(
+          colors: [
+            Color(0xFF0EA5E9),
+            Color(0xFF0062F5),
+            Color(0xFF2F3192),
+          ],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: _primaryBlue.withValues(alpha: 0.22),
+            blurRadius: 24,
+            offset: const Offset(0, 12),
+          ),
+        ],
+      ),
+      child: Stack(
         children: [
-          InkWell(
-            onTap: () => Navigator.pop(context),
-            child: const Icon(
-              Icons.arrow_back_ios_new,
-              color: Colors.white,
-              size: 17,
+          Positioned(
+            right: -30,
+            top: -34,
+            child: Container(
+              width: 116,
+              height: 116,
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.10),
+                shape: BoxShape.circle,
+              ),
             ),
           ),
-          const SizedBox(width: 10),
-          const Text(
-            'Riwayat Transaksi',
-            style: TextStyle(
-              color: Colors.white,
-              fontSize: 17,
-              fontWeight: FontWeight.w600,
+          Positioned(
+            right: 24,
+            bottom: -48,
+            child: Container(
+              width: 94,
+              height: 94,
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.08),
+                shape: BoxShape.circle,
+              ),
             ),
           ),
-          const Spacer(),
-          IconButton(
-            onPressed: _loadTransactions,
-            icon: const Icon(
-              Icons.refresh_rounded,
-              color: Colors.white,
-              size: 21,
-            ),
+          Row(
+            children: [
+              Container(
+                width: 52,
+                height: 52,
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.16),
+                  borderRadius: BorderRadius.circular(18),
+                  border: Border.all(
+                    color: Colors.white.withValues(alpha: 0.22),
+                  ),
+                ),
+                child: const Icon(
+                  Icons.receipt_long_rounded,
+                  color: Colors.white,
+                  size: 28,
+                ),
+              ),
+              const SizedBox(width: 13),
+              const Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Riwayat Transaksi',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 24,
+                        fontWeight: FontWeight.w900,
+                        letterSpacing: -0.3,
+                      ),
+                    ),
+                    SizedBox(height: 5),
+                    Text(
+                      'Pantau transaksi barang masuk dan keluar',
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        color: Color(0xFFEAF1FF),
+                        fontSize: 12.5,
+                        fontWeight: FontWeight.w600,
+                        height: 1.25,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 10),
+              Material(
+                color: Colors.white.withValues(alpha: 0.16),
+                borderRadius: BorderRadius.circular(16),
+                child: InkWell(
+                  onTap: _loadTransactions,
+                  borderRadius: BorderRadius.circular(16),
+                  child: Container(
+                    width: 42,
+                    height: 42,
+                    alignment: Alignment.center,
+                    child: const Icon(
+                      Icons.refresh_rounded,
+                      color: Colors.white,
+                      size: 22,
+                    ),
+                  ),
+                ),
+              ),
+            ],
           ),
         ],
       ),
@@ -712,146 +747,108 @@ class _RiwayatTransaksiScreenState extends State<RiwayatTransaksiScreen> {
   }
 
   Widget _buildSearchBar() {
-    return Row(
-      children: [
-        Expanded(
-          child: Container(
-            height: 40,
-            padding: const EdgeInsets.symmetric(horizontal: 12),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: const Color(0xFFD1D5DB)),
-            ),
-            child: Row(
-              children: [
-                const Icon(
-                  Icons.search_rounded,
-                  size: 18,
-                  color: Color(0xFF9CA3AF),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: TextField(
-                    controller: searchController,
-                    onChanged: (_) {
-                      setState(() {
-                        _resetPage();
-                      });
-                    },
-                    style: const TextStyle(fontSize: 12),
-                    decoration: const InputDecoration(
-                      hintText: 'Cari kode, barang, supplier, status...',
-                      hintStyle: TextStyle(
-                        fontSize: 11.5,
-                        color: Color(0xFF9CA3AF),
-                      ),
-                      border: InputBorder.none,
-                      isDense: true,
-                    ),
-                  ),
-                ),
-                if (searchController.text.trim().isNotEmpty)
-                  InkWell(
-                    onTap: () {
-                      searchController.clear();
-                      setState(() {
-                        _resetPage();
-                      });
-                    },
-                    borderRadius: BorderRadius.circular(999),
-                    child: const Icon(
-                      Icons.close_rounded,
-                      size: 18,
-                      color: Color(0xFF9CA3AF),
-                    ),
-                  ),
-              ],
-            ),
-          ),
-        ),
-        const SizedBox(width: 8),
-        InkWell(
-          onTap: _showFilterDialog,
-          borderRadius: BorderRadius.circular(10),
-          child: Container(
-            height: 40,
-            padding: const EdgeInsets.symmetric(horizontal: 12),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: const Color(0xFFD1D5DB)),
-            ),
-            child: const Row(
-              children: [
-                Icon(
-                  Icons.filter_list_rounded,
-                  size: 18,
-                  color: Color(0xFF2F47B7),
-                ),
-                SizedBox(width: 5),
-                Text(
-                  'Filter',
-                  style: TextStyle(
-                    fontSize: 11.5,
-                    color: Color(0xFF2F47B7),
-                    fontWeight: FontWeight.w700,
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ],
+    return HistorySearchBar(
+      controller: searchController,
+      hasActiveFilter: hasDateFilter,
+      onChanged: (_) {
+        setState(() {
+          _resetPage();
+        });
+      },
+      onClear: () {
+        searchController.clear();
+
+        setState(() {
+          _resetPage();
+        });
+      },
+      onFilterTap: _showFilterDialog,
     );
   }
 
-  Widget _filterDateBox({
-    required String label,
-    required String value,
-    required VoidCallback onTap,
-  }) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(10),
+  Widget _buildMainTabs() {
+    return HistoryMainTabs(
+      selectedTypeFilter: selectedTypeFilter,
+      onChanged: (value) {
+        setState(() {
+          selectedTypeFilter = value;
+          _resetPage();
+        });
+      },
+    );
+  }
+
+  Widget _buildStatusFilter() {
+    return HistoryStatusTabs(
+      selectedStatusFilter: selectedStatusFilter,
+      onChanged: (value) {
+        setState(() {
+          selectedStatusFilter = value;
+          _resetPage();
+        });
+      },
+    );
+  }
+
+  Widget _buildActiveFilterInfo() {
+    if (!hasDateFilter) {
+      return const SizedBox.shrink();
+    }
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 11),
       child: Container(
-        padding: const EdgeInsets.all(10),
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
         decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(10),
-          border: Border.all(color: const Color(0xFFD1D5DB)),
+          color: const Color(0xFFEFF6FF),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+            color: const Color(0xFFBFDBFE),
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: const Color(0xFF1E3A8A).withValues(alpha: 0.045),
+              blurRadius: 14,
+              offset: const Offset(0, 6),
+            ),
+          ],
         ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+        child: Row(
           children: [
-            Text(
-              label,
-              style: const TextStyle(
-                fontSize: 10.5,
-                color: Color(0xFF6B7280),
+            const Icon(
+              Icons.calendar_today_outlined,
+              size: 16,
+              color: _primaryBlue,
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                '${dariTanggal == null ? 'Awal' : formatDate(dariTanggal!)} - ${sampaiTanggal == null ? 'Akhir' : formatDate(sampaiTanggal!)}',
+                style: const TextStyle(
+                  fontSize: 12,
+                  color: _primaryBlue,
+                  fontWeight: FontWeight.w800,
+                ),
               ),
             ),
-            const SizedBox(height: 5),
-            Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    value,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      fontSize: 11.5,
-                      color: Color(0xFF111827),
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
+            InkWell(
+              onTap: () {
+                setState(() {
+                  dariTanggal = null;
+                  sampaiTanggal = null;
+                  _resetPage();
+                });
+              },
+              borderRadius: BorderRadius.circular(999),
+              child: const Padding(
+                padding: EdgeInsets.all(3),
+                child: Icon(
+                  Icons.close_rounded,
+                  size: 18,
+                  color: _primaryBlue,
                 ),
-                const Icon(
-                  Icons.calendar_today_outlined,
-                  size: 15,
-                  color: Color(0xFF2F47B7),
-                ),
-              ],
+              ),
             ),
           ],
         ),
@@ -859,178 +856,30 @@ class _RiwayatTransaksiScreenState extends State<RiwayatTransaksiScreen> {
     );
   }
 
-  Widget _buildMainTabs() {
-    return Row(
-      children: [
-        Expanded(child: _tabButton('Semua', 0)),
-        const SizedBox(width: 8),
-        Expanded(child: _tabButton('Masuk', 1)),
-        const SizedBox(width: 8),
-        Expanded(child: _tabButton('Keluar', 2)),
-      ],
-    );
-  }
-
-  Widget _buildStatusFilter() {
-    return Row(
-      children: [
-        Expanded(child: _statusButton('Pending', 3)),
-        const SizedBox(width: 8),
-        Expanded(child: _statusButton('Disetujui', 4)),
-        const SizedBox(width: 8),
-        Expanded(child: _statusButton('Ditolak', 5)),
-      ],
-    );
-  }
-
-  Widget _tabButton(String text, int value) {
-    final bool active = selectedTab == value;
-
-    return InkWell(
-      onTap: () {
-        setState(() {
-          selectedTab = value;
-          _resetPage();
-        });
-      },
-      borderRadius: BorderRadius.circular(9),
-      child: Container(
-        height: 34,
-        alignment: Alignment.center,
-        decoration: BoxDecoration(
-          color: active ? const Color(0xFF2F3192) : Colors.white,
-          borderRadius: BorderRadius.circular(9),
-          border: Border.all(
-            color: active ? const Color(0xFF2F3192) : const Color(0xFFD1D5DB),
-          ),
-        ),
-        child: Text(
-          text,
-          style: TextStyle(
-            fontSize: 11.5,
-            color: active ? Colors.white : const Color(0xFF4B5563),
-            fontWeight: FontWeight.w700,
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _statusButton(String text, int value) {
-    final bool active = selectedTab == value;
-
-    Color activeColor;
-    Color bgColor;
-
-    if (value == 3) {
-      activeColor = const Color(0xFFF59E0B);
-      bgColor = const Color(0xFFFFF7ED);
-    } else if (value == 4) {
-      activeColor = const Color(0xFF16A34A);
-      bgColor = const Color(0xFFEFFDF5);
-    } else {
-      activeColor = const Color(0xFFEF4444);
-      bgColor = const Color(0xFFFFE4E6);
-    }
-
-    return InkWell(
-      onTap: () {
-        setState(() {
-          selectedTab = value;
-          _resetPage();
-        });
-      },
-      borderRadius: BorderRadius.circular(9),
-      child: Container(
-        height: 32,
-        alignment: Alignment.center,
-        decoration: BoxDecoration(
-          color: active ? bgColor : Colors.white,
-          borderRadius: BorderRadius.circular(9),
-          border: Border.all(
-            color: active ? activeColor : const Color(0xFFD1D5DB),
-          ),
-        ),
-        child: Text(
-          text,
-          style: TextStyle(
-            fontSize: 10.8,
-            color: active ? activeColor : const Color(0xFF6B7280),
-            fontWeight: FontWeight.w700,
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildActiveFilterInfo() {
-    final bool hasDateFilter = dariTanggal != null || sampaiTanggal != null;
-
-    if (!hasDateFilter) {
-      return const SizedBox.shrink();
-    }
-
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 9),
-      decoration: BoxDecoration(
-        color: const Color(0xFFEFF6FF),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: const Color(0xFFBFDBFE)),
-      ),
-      child: Row(
-        children: [
-          const Icon(
-            Icons.calendar_today_outlined,
-            size: 15,
-            color: Color(0xFF2563EB),
-          ),
-          const SizedBox(width: 7),
-          Expanded(
-            child: Text(
-              '${dariTanggal == null ? 'Awal' : formatDate(dariTanggal!)} - ${sampaiTanggal == null ? 'Akhir' : formatDate(sampaiTanggal!)}',
-              style: const TextStyle(
-                fontSize: 11.5,
-                color: Color(0xFF2563EB),
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-          ),
-          InkWell(
-            onTap: () {
-              setState(() {
-                dariTanggal = null;
-                sampaiTanggal = null;
-                _resetPage();
-              });
-            },
-            child: const Icon(
-              Icons.close_rounded,
-              size: 17,
-              color: Color(0xFF2563EB),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
   Widget _buildSectionTitle() {
-    String title;
+    String typeTitle;
 
-    if (selectedTab == 1) {
-      title = 'Riwayat Barang Masuk';
-    } else if (selectedTab == 2) {
-      title = 'Riwayat Barang Keluar';
-    } else if (selectedTab == 3) {
-      title = 'Menunggu Approval';
-    } else if (selectedTab == 4) {
-      title = 'Transaksi Disetujui';
-    } else if (selectedTab == 5) {
-      title = 'Transaksi Ditolak';
+    if (selectedTypeFilter == 1) {
+      typeTitle = 'Barang Masuk';
+    } else if (selectedTypeFilter == 2) {
+      typeTitle = 'Barang Keluar';
     } else {
-      title = 'Semua Transaksi';
+      typeTitle = 'Semua Transaksi';
     }
+
+    String statusTitle;
+
+    if (selectedStatusFilter == 'pending') {
+      statusTitle = 'Pending';
+    } else if (selectedStatusFilter == 'approved') {
+      statusTitle = 'Disetujui';
+    } else if (selectedStatusFilter == 'rejected') {
+      statusTitle = 'Ditolak';
+    } else {
+      statusTitle = '';
+    }
+
+    final title = statusTitle.isEmpty ? typeTitle : '$typeTitle - $statusTitle';
 
     return Row(
       children: [
@@ -1038,25 +887,28 @@ class _RiwayatTransaksiScreenState extends State<RiwayatTransaksiScreen> {
           child: Text(
             title,
             style: const TextStyle(
-              fontSize: 13.5,
-              fontWeight: FontWeight.w800,
-              color: Color(0xFF374151),
+              fontSize: 18,
+              fontWeight: FontWeight.w900,
+              color: _darkText,
+              letterSpacing: -0.2,
             ),
           ),
         ),
         Container(
-          padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
+          padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 7),
           decoration: BoxDecoration(
-            color: Colors.white,
+            color: Colors.white.withValues(alpha: 0.96),
             borderRadius: BorderRadius.circular(999),
-            border: Border.all(color: const Color(0xFFD1D5DB)),
+            border: Border.all(
+              color: _borderColor,
+            ),
           ),
           child: Text(
             '${filteredList.length} data',
             style: const TextStyle(
-              fontSize: 10.5,
-              color: Color(0xFF6B7280),
-              fontWeight: FontWeight.w800,
+              fontSize: 12,
+              color: _softText,
+              fontWeight: FontWeight.w900,
             ),
           ),
         ),
@@ -1067,25 +919,39 @@ class _RiwayatTransaksiScreenState extends State<RiwayatTransaksiScreen> {
   Widget _buildEmptyState() {
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.symmetric(vertical: 36),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(14),
+      padding: const EdgeInsets.symmetric(
+        vertical: 36,
+        horizontal: 16,
+      ),
+      decoration: _softBoxDecoration(
+        radius: 22,
+        shadow: true,
       ),
       child: const Column(
         children: [
           Icon(
             Icons.inbox_outlined,
-            size: 40,
+            size: 46,
             color: Color(0xFF9CA3AF),
           ),
-          SizedBox(height: 8),
+          SizedBox(height: 11),
           Text(
             'Tidak ada transaksi',
             style: TextStyle(
-              fontSize: 13,
-              color: Color(0xFF6B7280),
+              fontSize: 14,
+              color: Color(0xFF374151),
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+          SizedBox(height: 5),
+          Text(
+            'Coba ubah pencarian, jenis transaksi, status, atau tanggal.',
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontSize: 12.5,
+              color: _softText,
               fontWeight: FontWeight.w600,
+              height: 1.28,
             ),
           ),
         ],
@@ -1096,23 +962,26 @@ class _RiwayatTransaksiScreenState extends State<RiwayatTransaksiScreen> {
   Widget _buildErrorState() {
     return Container(
       width: double.infinity,
-      padding: const EdgeInsets.symmetric(vertical: 34, horizontal: 16),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(14),
+      padding: const EdgeInsets.symmetric(
+        vertical: 36,
+        horizontal: 16,
+      ),
+      decoration: _softBoxDecoration(
+        radius: 22,
+        shadow: true,
       ),
       child: Column(
         children: [
           const Icon(
             Icons.wifi_off_rounded,
-            size: 42,
+            size: 46,
             color: Color(0xFFEF4444),
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: 11),
           const Text(
             'Gagal memuat riwayat',
             style: TextStyle(
-              fontSize: 13,
+              fontSize: 14,
               color: Color(0xFF374151),
               fontWeight: FontWeight.w900,
             ),
@@ -1122,22 +991,56 @@ class _RiwayatTransaksiScreenState extends State<RiwayatTransaksiScreen> {
             errorMessage ?? 'Terjadi kesalahan saat memuat data.',
             textAlign: TextAlign.center,
             style: const TextStyle(
-              fontSize: 11.5,
-              color: Color(0xFF6B7280),
+              fontSize: 12.5,
+              color: _softText,
+              fontWeight: FontWeight.w600,
+              height: 1.28,
             ),
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: 15),
           ElevatedButton.icon(
             onPressed: _loadTransactions,
-            icon: const Icon(Icons.refresh_rounded, size: 17),
+            icon: const Icon(
+              Icons.refresh_rounded,
+              size: 18,
+            ),
             label: const Text('Coba Lagi'),
             style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFF2F47B7),
+              backgroundColor: _primaryBlue,
               foregroundColor: Colors.white,
+              elevation: 0,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(15),
+              ),
+              textStyle: const TextStyle(
+                fontWeight: FontWeight.w900,
+              ),
             ),
           ),
         ],
       ),
+    );
+  }
+
+  BoxDecoration _softBoxDecoration({
+    double radius = 16,
+    bool shadow = false,
+  }) {
+    return BoxDecoration(
+      color: Colors.white.withValues(alpha: 0.96),
+      borderRadius: BorderRadius.circular(radius),
+      border: Border.all(
+        color: _borderColor,
+      ),
+      boxShadow: shadow
+          ? [
+              BoxShadow(
+                color: const Color(0xFF1E3A8A).withValues(alpha: 0.055),
+                blurRadius: 20,
+                offset: const Offset(0, 9),
+              ),
+            ]
+          : null,
     );
   }
 
@@ -1146,326 +1049,129 @@ class _RiwayatTransaksiScreenState extends State<RiwayatTransaksiScreen> {
 
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text(message),
+        content: Text(
+          message,
+          style: const TextStyle(
+            color: Colors.white,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
         behavior: SnackBarBehavior.floating,
-        backgroundColor:
-            isError ? const Color(0xFFEF4444) : const Color(0xFF2F47B7),
+        backgroundColor: isError ? const Color(0xFFEF4444) : _primaryBlue,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(14),
+        ),
       ),
     );
   }
 }
 
-class _RiwayatApprovalCard extends StatelessWidget {
-  final String nomor;
-  final bool isMasuk;
-  final String tanggal;
-  final String supplier;
-  final String partnerLabel;
-  final String warehouse;
-  final String totalBarang;
-  final String kode;
-  final String nama;
-  final String status;
-  final String inputOleh;
-  final String? alasan;
-  final VoidCallback onTap;
-
-  const _RiwayatApprovalCard({
-    required this.nomor,
-    required this.isMasuk,
-    required this.tanggal,
-    required this.supplier,
-    required this.partnerLabel,
-    required this.warehouse,
-    required this.totalBarang,
-    required this.kode,
-    required this.nama,
-    required this.status,
-    required this.inputOleh,
-    required this.onTap,
-    this.alasan,
-  });
-
-  bool get isPending => status == 'Pending';
-  bool get isApproved => status == 'Disetujui';
-  bool get isRejected => status == 'Ditolak';
+class _HistoryBackgroundPainter extends CustomPainter {
+  const _HistoryBackgroundPainter();
 
   @override
-  Widget build(BuildContext context) {
-    final Color typeColor =
-        isMasuk ? const Color(0xFF16A34A) : const Color(0xFFEF4444);
-
-    final Color typeSoftColor =
-        isMasuk ? const Color(0xFFD8F3DC) : const Color(0xFFFDE2E2);
-
-    final Color statusColor = isPending
-        ? const Color(0xFFF59E0B)
-        : isApproved
-            ? const Color(0xFF16A34A)
-            : const Color(0xFFEF4444);
-
-    final Color statusSoftColor = isPending
-        ? const Color(0xFFFFF7ED)
-        : isApproved
-            ? const Color(0xFFEFFDF5)
-            : const Color(0xFFFFE4E6);
-
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(14),
-      child: Container(
-        padding: const EdgeInsets.all(12),
-        decoration: BoxDecoration(
-          color: isPending ? const Color(0xFFFFFBEB) : Colors.white,
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(
-            color:
-                isPending ? const Color(0xFFFCD34D) : const Color(0xFFE5E7EB),
-          ),
-          boxShadow: const [
-            BoxShadow(
-              color: Color(0x10000000),
-              blurRadius: 6,
-              offset: Offset(0, 2),
-            ),
-          ],
-        ),
-        child: Column(
-          children: [
-            Row(
-              children: [
-                Container(
-                  width: 42,
-                  height: 42,
-                  decoration: BoxDecoration(
-                    color: typeSoftColor,
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: Icon(
-                    isMasuk ? Icons.download_rounded : Icons.upload_rounded,
-                    color: typeColor,
-                    size: 23,
-                  ),
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Wrap(
-                        spacing: 6,
-                        runSpacing: 4,
-                        crossAxisAlignment: WrapCrossAlignment.center,
-                        children: [
-                          Text(
-                            kode,
-                            style: TextStyle(
-                              fontSize: 12.5,
-                              color: typeColor,
-                              fontWeight: FontWeight.w900,
-                            ),
-                          ),
-                          _smallBadge(
-                            text: isMasuk ? 'Barang Masuk' : 'Barang Keluar',
-                            color: typeColor,
-                            bgColor: typeSoftColor,
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 5),
-                      Text(
-                        nama,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          fontSize: 13.5,
-                          color: Color(0xFF111827),
-                          fontWeight: FontWeight.w800,
-                        ),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        '$partnerLabel: $supplier',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          fontSize: 11.5,
-                          color: Color(0xFF6B7280),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(width: 8),
-                _statusBadge(
-                  text: status,
-                  color: statusColor,
-                  bgColor: statusSoftColor,
-                ),
-              ],
-            ),
-            const SizedBox(height: 10),
-            Container(
-              padding: const EdgeInsets.all(10),
-              decoration: BoxDecoration(
-                color: const Color(0xFFF8FAFC),
-                borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: const Color(0xFFE5E7EB)),
-              ),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: _detailMini(
-                      icon: Icons.calendar_today_outlined,
-                      label: 'Tanggal',
-                      value: tanggal,
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: _detailMini(
-                      icon: Icons.inventory_2_outlined,
-                      label: 'Jumlah',
-                      value: totalBarang,
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: _detailMini(
-                      icon: Icons.warehouse_outlined,
-                      label: 'Gudang',
-                      value: warehouse,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            if (isRejected && alasan != null && alasan!.trim().isNotEmpty) ...[
-              const SizedBox(height: 8),
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(9),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFFFE4E6),
-                  borderRadius: BorderRadius.circular(9),
-                ),
-                child: Text(
-                  'Alasan ditolak: $alasan',
-                  style: const TextStyle(
-                    fontSize: 11.5,
-                    color: Color(0xFFB91C1C),
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
-              ),
-            ],
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _smallBadge({
-    required String text,
-    required Color color,
-    required Color bgColor,
-  }) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
-      decoration: BoxDecoration(
-        color: bgColor,
-        borderRadius: BorderRadius.circular(999),
-      ),
-      child: Text(
-        text,
-        style: TextStyle(
-          fontSize: 9.5,
-          color: color,
-          fontWeight: FontWeight.w700,
-        ),
-      ),
-    );
-  }
-
-  Widget _statusBadge({
-    required String text,
-    required Color color,
-    required Color bgColor,
-  }) {
-    IconData icon;
-
-    if (text == 'Pending') {
-      icon = Icons.schedule_rounded;
-    } else if (text == 'Disetujui') {
-      icon = Icons.check_circle_outline_rounded;
-    } else {
-      icon = Icons.cancel_outlined;
-    }
-
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
-      decoration: BoxDecoration(
-        color: bgColor,
-        borderRadius: BorderRadius.circular(999),
-        border: Border.all(color: color.withOpacity(0.4)),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(
-            icon,
-            size: 13,
-            color: color,
-          ),
-          const SizedBox(width: 4),
-          Text(
-            text,
-            style: TextStyle(
-              fontSize: 10,
-              color: color,
-              fontWeight: FontWeight.w800,
-            ),
-          ),
+  void paint(Canvas canvas, Size size) {
+    final Paint basePaint = Paint()
+      ..shader = const LinearGradient(
+        begin: Alignment.topCenter,
+        end: Alignment.bottomCenter,
+        colors: [
+          Color(0xFFFFFFFF),
+          Color(0xFFF8FBFF),
+          Color(0xFFEFF6FF),
         ],
+      ).createShader(Offset.zero & size);
+
+    canvas.drawRect(Offset.zero & size, basePaint);
+
+    final Paint topGlow = Paint()
+      ..shader = RadialGradient(
+        center: Alignment.topLeft,
+        radius: 1.05,
+        colors: [
+          const Color(0xFFD9EAFF).withValues(alpha: 0.88),
+          const Color(0xFFEAF4FF).withValues(alpha: 0.38),
+          Colors.white.withValues(alpha: 0),
+        ],
+        stops: const [0.0, 0.55, 1.0],
+      ).createShader(
+        Rect.fromLTWH(
+          -size.width * 0.42,
+          -size.height * 0.18,
+          size.width * 1.12,
+          size.height * 0.58,
+        ),
+      );
+
+    canvas.drawOval(
+      Rect.fromLTWH(
+        -size.width * 0.42,
+        -size.height * 0.18,
+        size.width * 1.12,
+        size.height * 0.58,
       ),
+      topGlow,
+    );
+
+    final Paint rightGlow = Paint()
+      ..shader = RadialGradient(
+        center: Alignment.centerRight,
+        radius: 0.95,
+        colors: [
+          const Color(0xFFD8EAFF).withValues(alpha: 0.58),
+          const Color(0xFFEAF4FF).withValues(alpha: 0.26),
+          Colors.white.withValues(alpha: 0),
+        ],
+        stops: const [0.0, 0.60, 1.0],
+      ).createShader(
+        Rect.fromLTWH(
+          size.width * 0.48,
+          size.height * 0.20,
+          size.width * 0.70,
+          size.height * 0.55,
+        ),
+      );
+
+    canvas.drawOval(
+      Rect.fromLTWH(
+        size.width * 0.50,
+        size.height * 0.20,
+        size.width * 0.76,
+        size.height * 0.58,
+      ),
+      rightGlow,
+    );
+
+    final Paint bottomGlow = Paint()
+      ..shader = RadialGradient(
+        center: Alignment.bottomRight,
+        radius: 1.02,
+        colors: [
+          const Color(0xFFD8EAFF).withValues(alpha: 0.72),
+          const Color(0xFFEAF4FF).withValues(alpha: 0.36),
+          Colors.white.withValues(alpha: 0),
+        ],
+        stops: const [0.0, 0.62, 1.0],
+      ).createShader(
+        Rect.fromLTWH(
+          size.width * 0.38,
+          size.height * 0.68,
+          size.width * 0.90,
+          size.height * 0.48,
+        ),
+      );
+
+    canvas.drawOval(
+      Rect.fromLTWH(
+        size.width * 0.38,
+        size.height * 0.68,
+        size.width * 0.90,
+        size.height * 0.48,
+      ),
+      bottomGlow,
     );
   }
 
-  Widget _detailMini({
-    required IconData icon,
-    required String label,
-    required String value,
-  }) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Icon(
-          icon,
-          size: 15,
-          color: const Color(0xFF6B7280),
-        ),
-        const SizedBox(height: 4),
-        Text(
-          label,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: const TextStyle(
-            fontSize: 9.5,
-            color: Color(0xFF6B7280),
-          ),
-        ),
-        const SizedBox(height: 2),
-        Text(
-          value,
-          maxLines: 2,
-          overflow: TextOverflow.ellipsis,
-          style: const TextStyle(
-            fontSize: 10.5,
-            color: Color(0xFF111827),
-            fontWeight: FontWeight.w700,
-          ),
-        ),
-      ],
-    );
-  }
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
 }

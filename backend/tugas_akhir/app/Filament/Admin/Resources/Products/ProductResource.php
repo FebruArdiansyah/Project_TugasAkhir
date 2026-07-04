@@ -20,11 +20,11 @@ class ProductResource extends Resource
 
     protected static string|BackedEnum|null $navigationIcon = Heroicon::OutlinedCube;
 
-    protected static ?string $navigationLabel = 'Produk Jadi';
+    protected static ?string $navigationLabel = 'Produk';
 
-    protected static ?string $modelLabel = 'Produk Jadi';
+    protected static ?string $modelLabel = 'Produk';
 
-    protected static ?string $pluralModelLabel = 'Produk Jadi';
+    protected static ?string $pluralModelLabel = 'Produk';
 
     protected static string|\UnitEnum|null $navigationGroup = 'Inventory Management';
 
